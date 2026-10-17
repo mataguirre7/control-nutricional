@@ -16,7 +16,12 @@ iniciarApi();
 bot
   .start({ onStart: (info) => console.log(`Bot @${info.username} escuchando mensajes`) })
   .catch((error) => {
-    console.error('El bot no pudo arrancar. ¿Está bien el TELEGRAM_BOT_TOKEN?', error.message);
+    // 409: otra copia del bot (por ejemplo en otra compu) está usando el mismo token.
+    const motivo =
+      error.error_code === 409
+        ? 'Hay otra copia del bot corriendo con el mismo token (¿quedó prendido en otra compu?).'
+        : '¿Está bien el TELEGRAM_BOT_TOKEN?';
+    console.error(`El bot no pudo arrancar. ${motivo}`, error.message);
     process.exit(1);
   });
 
