@@ -9,8 +9,16 @@ services:
     dns:
       - 1.1.1.1
       - 8.8.8.8
+    # La API solo escucha dentro de la máquina (127.0.0.1): no queda expuesta a internet.
+    # Desde otra compu se consulta con un túnel SSH (ver README).
     ports:
-      - "${PORT:-3000}:${PORT:-3000}"
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+    # Los logs rotan: como máximo 3 archivos de 10 MB, así no llenan el disco.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       # la base de datos y las fotos quedan en la carpeta data/ de tu máquina.
       - ./data:/app/data

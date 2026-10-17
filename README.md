@@ -289,3 +289,21 @@ Así se procesa una foto de comida:
 ### Backup
 
 Todo está en la carpeta `data/`. Para hacer un backup alcanza con copiarla, idealmente con el sistema parado (`docker compose stop`).
+
+---
+
+## Producción en un VPS (Linux)
+
+1. Instalar Docker: `curl -fsSL https://get.docker.com | sudo sh`
+2. Clonar el repo y copiar el `.env` (no está en git): `scp .env usuario@IP:~/control-nutricional/`
+3. **Apagar cualquier otra copia del bot** (por ejemplo en tu PC): con el mismo token, solo puede correr una a la vez.
+4. `docker compose up -d --build`
+
+Actualizar después de un cambio: `git pull && docker compose up -d --build`.
+
+La API solo escucha dentro del servidor (`127.0.0.1`). Para consultarla desde tu compu, abrí un túnel SSH y usala como si fuera local:
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 usuario@IP
+curl -H "x-api-key: TU_API_KEY" http://localhost:3000/api/usuarios
+```
