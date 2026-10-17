@@ -9,31 +9,37 @@ export const ZONA_HORARIA = 'America/Argentina/Buenos_Aires';
 export const CARPETA_DATOS = 'data';
 export const CARPETA_FOTOS = 'data/fotos';
 
+// Meta de agua para quien todavía no configuró la suya con /meta_agua.
+export const META_AGUA_POR_DEFECTO = 2000;
+
 // Sin estas variables el sistema completo no puede funcionar.
 export const VARIABLES_OBLIGATORIAS = [
   'TELEGRAM_BOT_TOKEN',
-  'TELEGRAM_CHAT_ID',
+  'TELEGRAM_CHAT_IDS',
   'ANTHROPIC_API_KEY',
   'USDA_API_KEY',
   'API_KEY',
 ];
 
-// Convierte "08:00,12:30" en ["08:00", "12:30"].
+// Convierte "08:00,12:30" en ["08:00", "12:30"]. Sirve para cualquier lista separada por coma.
 function listaDeHorarios(valor) {
   return valor.split(',').map((hora) => hora.trim()).filter(Boolean);
 }
 
 export const config = {
   telegramToken: process.env.TELEGRAM_BOT_TOKEN,
-  telegramChatId: process.env.TELEGRAM_CHAT_ID,
+  // Las personas que pueden usar el bot. Cada una tiene sus propios datos y metas.
+  telegramChatIds: listaDeHorarios(process.env.TELEGRAM_CHAT_IDS || ''),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   claudeModel: process.env.CLAUDE_MODEL || 'claude-sonnet-5-5',
   usdaApiKey: process.env.USDA_API_KEY,
   apiKey: process.env.API_KEY,
   port: Number(process.env.PORT || 3000),
   vasoMl: Number(process.env.VASO_ML || 250),
-  // Opcional: si no está, el bot no muestra el avance hacia la meta.
-  pesoObjetivo: Number(process.env.PESO_OBJETIVO) || null,
+
+  // Resumen de cada noche y resumen semanal (este último, los domingos).
+  resumenDiario: listaDeHorarios(process.env.RESUMEN_DIARIO || '22:30'),
+  resumenSemanal: listaDeHorarios(process.env.RESUMEN_SEMANAL || '20:00'),
 
   // Horarios de los recordatorios (HH:MM, hora argentina). Cada uno acepta varios separados por coma.
   recordatorios: {
@@ -46,7 +52,7 @@ export const config = {
   },
 };
 
-// Rangos horarios para deducir el tipo de comida sin preguntarle nada a ella.
+// Rangos horarios para deducir el tipo de comida sin preguntarle nada a nadie.
 // "desde" incluido, "hasta" excluido. Lo que no cae en ningún rango (la noche) es cena.
 export const RANGOS_COMIDAS = [
   { tipo: 'desayuno', desde: 5, hasta: 11 },

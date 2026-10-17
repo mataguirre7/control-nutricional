@@ -5,12 +5,12 @@ services:
     env_file: .env
     environment:
       - TZ=America/Argentina/Buenos_Aires
-    # DNS públicos: algunos routers hogareños no resuelven api.nal.usda.gov (USDA).
+    # DNS públicos, algunos routers hogareños no resuelven api.nal.usda.gov (USDA).
     dns:
       - 1.1.1.1
       - 8.8.8.8
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     volumes:
-      # La base de datos y las fotos quedan en la carpeta data/ de tu máquina.
+      # la base de datos y las fotos quedan en la carpeta data/ de tu máquina.
       - ./data:/app/data

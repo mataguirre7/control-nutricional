@@ -1,10 +1,11 @@
 # Control nutricional
 
-Sistema simple para seguir comidas, agua y peso de **una sola persona** usando Telegram.
+Sistema simple para seguir comidas, agua y peso de **una familia** (las personas que configures) usando Telegram, pensado para acompañar a cada una a cuidarse y bajar de peso, no solo para registrar. Cada persona tiene sus propios datos y metas.
 
-- Ella usa solo el bot. Manda fotos de la comida o de la balanza, escribe su peso o toca **"+1 vaso 💧"**.
-- Claude mira la foto. Si es comida, identifica los alimentos y estima los gramos. Si es una balanza, lee el peso.
+- Cada persona usa solo el bot, desde su propio chat. Manda fotos de la comida o de la balanza, cuenta en palabras lo que comió, escribe su peso, toca **"+1 vaso 💧"** o hace preguntas ("¿qué puedo cenar?").
+- Claude entiende la foto o el texto. Si es comida, identifica los alimentos, estima los gramos y le deja un consejo amable. Si es una balanza, lee el peso.
 - Los nutrientes se calculan con la base de **USDA FoodData Central**.
+- Tiene barras de progreso, rachas, logros, tendencia semanal de peso, un resumen cada noche y un resumen semanal (que también puede llegarle a la familia).
 - Vos consultás todo con una API REST.
 
 ## Requisitos
@@ -26,14 +27,14 @@ Sistema simple para seguir comidas, agua y peso de **una sola persona** usando T
 
 ### 2. Obtener el chat_id
 
-El bot solo le responde a un chat, así que necesitás el número de chat de tu mamá.
+El bot solo le responde a los chats que configures, así que necesitás el número de chat de cada persona. Repetí esto para cada una:
 
-1. Desde el Telegram de tu mamá, abrí el bot que creaste y mandale cualquier mensaje (ej: `hola`).
+1. Desde el Telegram de esa persona, abrí el bot que creaste y mandale cualquier mensaje (ej: `hola`).
 2. En el navegador, entrá a la siguiente dirección, reemplazando `<TOKEN>` por el token del paso 1:
    ```
    https://api.telegram.org/bot<TOKEN>/getUpdates
    ```
-3. En la respuesta, buscá `"chat":{"id":123456789,...}`. Ese número es el `TELEGRAM_CHAT_ID`.
+3. En la respuesta, buscá `"chat":{"id":123456789,"first_name":"..."}`. Ese número es su chat_id; el `first_name` te dice de quién es. Van todos juntos en `TELEGRAM_CHAT_IDS`, separados por coma.
 
 > Si la respuesta sale vacía (`"result":[]`), mandale otro mensaje al bot y recargá la página.
 >
@@ -64,7 +65,7 @@ Abrí `.env` y completá las cinco variables obligatorias:
 | Variable | Qué es |
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Token de BotFather (paso 1) |
-| `TELEGRAM_CHAT_ID` | chat_id de tu mamá (paso 2) |
+| `TELEGRAM_CHAT_IDS` | chat_id de cada persona, separados por coma (paso 2) |
 | `ANTHROPIC_API_KEY` | Key de Anthropic (paso 4) |
 | `USDA_API_KEY` | Key de USDA (paso 3) |
 | `API_KEY` | Una clave que inventás vos para proteger la API REST |
@@ -76,7 +77,8 @@ Las opcionales ya tienen valores por defecto:
 | `CLAUDE_MODEL` | `claude-sonnet-5-5` | Modelo de Claude que analiza las fotos |
 | `PORT` | `3000` | Puerto de la API |
 | `VASO_ML` | `250` | Mililitros que suma cada "+1 vaso" |
-| `PESO_OBJETIVO` | (vacío) | Peso meta en kg; si está, el bot muestra el % del camino recorrido |
+| `RESUMEN_DIARIO` | `22:30` | Hora del resumen de cada noche |
+| `RESUMEN_SEMANAL` | `20:00` | Hora del resumen semanal (los domingos) |
 | `RECORDATORIO_DESAYUNO` | `08:30` | Horario del recordatorio |
 | `RECORDATORIO_ALMUERZO` | `13:00` | Horario del recordatorio |
 | `RECORDATORIO_MERIENDA` | `17:30` | Horario del recordatorio |
@@ -85,6 +87,21 @@ Las opcionales ya tienen valores por defecto:
 | `RECORDATORIO_PESO` | `08:00` | Horario del recordatorio |
 
 Los horarios van en formato `HH:MM`, en hora argentina. Todos aceptan varios valores separados por coma.
+
+Las **metas** (peso, calorías y agua) no van en el `.env`: cada persona las configura escribiéndole al bot, como en una charla.
+
+| Le escribe… | Qué pasa |
+|---|---|
+| "quiero llegar a 85 kilos" | Meta de peso; el bot muestra el % del camino recorrido |
+| "quiero comer 1600 calorías por día" | Meta de calorías; se muestra con barra de progreso |
+| "quiero tomar 2 litros de agua por día" | Meta de agua (si no la cambia, son 2 L) |
+| "sacá mi meta de calorías" | Saca esa meta |
+
+Para quien prefiera comandos, también están `/metas`, `/meta_peso 85`, `/meta_kcal 1600`, `/meta_agua 2` y `/meta_peso 0` (saca la meta).
+
+> Conviene que las metas de peso y calorías las defina su médico o nutricionista.
+>
+> El bot no puede escribirle primero a nadie: cada persona tiene que mandarle `/start` una vez para empezar a recibir recordatorios y resúmenes.
 
 ### 6. Levantar todo
 
@@ -108,18 +125,42 @@ docker compose up -d --build
 
 ---
 
-## Cómo lo usa ella
+## Cómo se usa
 
-| Ella hace… | El bot… |
+No hace falta saber comandos. Abajo del chat quedan siempre 4 botones grandes, y todo lo demás se hace mandando fotos o escribiendo normal.
+
+```
+[ 💧 Tomé un vaso ] [ 📊 ¿Cómo voy? ]
+[ 🎯 Mis metas    ] [ ❓ Ayuda      ]
+```
+
+| La persona hace… | El bot… |
 |---|---|
-| Manda una foto de comida | La anota y responde con una descripción, los ingredientes, los macros y las kcal acumuladas del día |
-| Manda una foto de la balanza | Lee el peso, lo anota y responde con el avance: cambio desde el primer peso, % hacia la meta (`PESO_OBJETIVO`) y diferencia con la vez anterior |
-| Escribe `72.5` o `72,5` | Lo mismo que la foto de la balanza |
-| Toca **+1 vaso 💧** | Suma un vaso y responde `Llevás 1,25 L de agua hoy 💧` |
-| Escribe `/agua` | Le muestra el total del día y el botón |
-| Manda otra cosa | Le explica qué puede mandar |
+| Manda una foto de comida | La anota y responde con descripción, ingredientes, macros, un consejo amable 💡, la barra de calorías del día y la racha |
+| Cuenta lo que comió ("comí 2 empanadas de carne") | Lo mismo que con la foto |
+| Toca **➖ Era menos** / **➕ Era más** | Corrige la porción (×0,8 / ×1,25; uno deshace al otro) |
+| Toca **🗑️ Borrar** | Pide confirmación y borra la comida |
+| Manda una foto de la balanza, o escribe `72.5` | Anota el peso y responde con el avance: desde el inicio, % hacia la meta, promedio semanal, cambio desde la vez anterior y logros 🏅 |
+| Toca **💧 Tomé un vaso** (o **+1 vaso** en los recordatorios), o escribe "tomé 2 vasos" | Suma agua y muestra la barra; festeja cuando cumple la meta del día |
+| Toca **📊 ¿Cómo voy?** | Le muestra cómo va el día |
+| Toca **🎯 Mis metas**, o escribe "quiero llegar a 85 kilos" | Muestra o cambia sus metas |
+| Toca **❓ Ayuda** | Le recuerda todo lo que puede mandar |
+| Pregunta algo ("¿qué puedo cenar?") | Claude le responde usando lo que ya comió y sus metas |
 
-El tipo de comida (desayuno, almuerzo, merienda o cena) se deduce por la hora de la foto. Los rangos están en `RANGOS_COMIDAS`, dentro de [src/config.js](src/config.js).
+El tipo de comida (desayuno, almuerzo, merienda o cena) se deduce por la hora. Los rangos están en `RANGOS_COMIDAS`, dentro de [src/config.js](src/config.js).
+
+### Lo que el bot hace solo
+
+- **Recordatorios que no molestan:** si ya anotó el almuerzo, no le recuerda el almuerzo; si ya cumplió el agua, se cortan los de agua; si ya se pesó, no le recuerda el peso.
+- **Resumen de cada noche** (`RESUMEN_DIARIO`): comidas, calorías, agua, racha y una sugerencia de Claude para mañana.
+- **Resumen semanal** (domingos, `RESUMEN_SEMANAL`): días anotados, promedio de calorías, días con el agua cumplida, tendencia de peso y racha. Cada persona recibe el suyo y una copia del de los demás ("Así le fue a Marta esta semana"), para acompañarse entre todos. Quien no anotó nada en la semana no tiene resumen.
+
+Los horarios son los mismos para todos, pero cada persona recibe lo suyo, con sus propios datos y metas.
+- **Logros:** rachas de 3, 7, 14, 21, 30… días anotando o cumpliendo el agua; el primer kilo, cada 5 kg y el 5% y 10% del peso inicial.
+
+### Costo
+
+Cada foto, texto libre o pregunta es una llamada a Claude (unos centavos de dólar). Los números de peso, los botones y los comandos no usan Claude. El consejo de la noche es una llamada más por día.
 
 ---
 
@@ -127,21 +168,40 @@ El tipo de comida (desayuno, almuerzo, merienda o cena) se deduce por la hora de
 
 Todas las rutas piden el header `x-api-key` con el valor de `API_KEY`.
 
+`/api/dia` y `/api/rango` aceptan `?chat_id=…` para traer a una sola persona. Sin `chat_id` devuelven a todas, agrupadas en `usuarios`. Un `chat_id` que no está en `TELEGRAM_CHAT_IDS` devuelve 404.
+
+### Personas
+
+```bash
+curl -H "x-api-key: TU_API_KEY" http://localhost:3000/api/usuarios
+```
+
+```json
+[
+  { "chat_id": "111111111", "nombre": "Marta", "registrado": true, "peso_objetivo": 85, "meta_kcal": 1600, "meta_agua_ml": 2000 },
+  { "chat_id": "333333333", "nombre": null, "registrado": false, "peso_objetivo": null, "meta_kcal": null, "meta_agua_ml": 2000 }
+]
+```
+
+`registrado: false` significa que esa persona todavía no le escribió al bot.
+
 ### Un día
 
 ```bash
-curl -H "x-api-key: TU_API_KEY" http://localhost:3000/api/dia/2026-10-16
+curl -H "x-api-key: TU_API_KEY" "http://localhost:3000/api/dia/2026-10-16?chat_id=111111111"
 ```
 
 ```json
 {
+  "chat_id": "111111111",
+  "nombre": "Marta",
   "fecha": "2026-10-16",
   "comidas": [
     {
       "id": 12,
       "fecha_hora": "2026-10-16 13:05:00",
       "tipo_comida": "almuerzo",
-      "foto_path": "data/fotos/2026-10-16_130500_345.jpg",
+      "foto_path": "data/fotos/111111111_2026-10-16_130500_345.jpg",
       "confianza": 0.78,
       "items": [
         {
@@ -167,15 +227,23 @@ curl -H "x-api-key: TU_API_KEY" http://localhost:3000/api/dia/2026-10-16
 - `fuente` vale `"usda"` si el alimento se encontró en USDA, o `"estimado_ia"` si se usó la estimación de Claude.
 - `peso` es el último registro del día, o `null` si ese día no se pesó.
 
+Sin `chat_id` (`/api/dia/2026-10-16`):
+
+```json
+{ "fecha": "2026-10-16", "usuarios": [ { "chat_id": "111111111", "nombre": "Marta", "...": "mismo formato de arriba" } ] }
+```
+
 ### Un rango de días
 
 ```bash
-curl -H "x-api-key: TU_API_KEY" "http://localhost:3000/api/rango?desde=2026-10-01&hasta=2026-10-16"
+curl -H "x-api-key: TU_API_KEY" "http://localhost:3000/api/rango?desde=2026-10-01&hasta=2026-10-16&chat_id=111111111"
 ```
 
 ```json
-{ "desde": "2026-10-01", "hasta": "2026-10-16", "dias": [ { "...": "mismo formato que /api/dia" } ] }
+{ "desde": "2026-10-01", "hasta": "2026-10-16", "chat_id": "111111111", "nombre": "Marta", "dias": [ { "...": "mismo formato que /api/dia" } ] }
 ```
+
+Sin `chat_id`: `{ "desde", "hasta", "usuarios": [ { "chat_id", "nombre", "dias": [...] } ] }`.
 
 Incluye todos los días del rango, aunque no tengan registros. Admite como máximo 366 días.
 
@@ -201,10 +269,11 @@ src/
   index.js        # arranca bot, API y recordatorios
   config.js       # lee el .env y valida las variables
   db.js           # tablas SQLite y funciones de lectura/escritura
-  bot.js          # handlers de Telegram
-  vision.js       # llamada a Claude con la foto (respuesta en JSON estricto)
-  nutrition.js    # búsqueda en USDA y cálculo por gramos
-  reminders.js    # recordatorios con node-cron
+  bot.js          # handlers de Telegram (fotos, textos, botones, comandos)
+  vision.js       # llamadas a Claude: analizar fotos/textos (JSON estricto) y consejo del día
+  nutrition.js    # búsqueda en USDA, cálculo por gramos y corrección de porciones
+  progreso.js     # barras, rachas, logros, tendencia de peso, resúmenes y mensajes
+  reminders.js    # recordatorios inteligentes y resúmenes con node-cron
   api.js          # endpoints de Express
   probar-foto.js  # script para probar una foto desde la consola
 data/             # nutricion.db y fotos/ (no se sube a git)

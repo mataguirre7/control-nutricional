@@ -20,6 +20,16 @@ bot
     process.exit(1);
   });
 
+// El menú de comandos que aparece en Telegram al tocar "/" o el botón "Menú".
+bot.api
+  .setMyCommands([
+    { command: 'hoy', description: 'Ver cómo vas hoy 📊' },
+    { command: 'agua', description: 'Sumar un vaso de agua 💧' },
+    { command: 'metas', description: 'Ver tus metas 🎯' },
+    { command: 'start', description: 'Ver qué le podés mandar al bot' },
+  ])
+  .catch((error) => console.error('No pude configurar el menú de comandos:', error.message));
+
 // Red de seguridad: una promesa rechazada que nadie atrapó no debe tirar el proceso.
 process.on('unhandledRejection', (error) => {
   console.error('Error no atrapado:', error);

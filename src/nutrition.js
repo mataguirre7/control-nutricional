@@ -117,6 +117,19 @@ export function sumarNutrientes(listaDeNutrientes) {
   return total;
 }
 
+// Multiplica gramos y nutrientes de todos los alimentos de una comida.
+// Lo usan los botones "Era menos" (factor 0.8) y "Era más" (factor 1.25).
+export function escalarComida(comida, factor) {
+  const items = comida.items.map((item) => {
+    const nutrientes = {};
+    for (const clave of NUTRIENTES) {
+      nutrientes[clave] = redondear((item.nutrientes[clave] ?? 0) * factor);
+    }
+    return { ...item, gramos: redondear(item.gramos * factor), nutrientes };
+  });
+  return { items, totales: sumarNutrientes(items.map((item) => item.nutrientes)) };
+}
+
 // Recibe los items que devolvió Claude y arma la comida completa:
 // { items, totales, confianza }, lista para guardar en la base.
 export async function calcularComida(itemsDeClaude) {

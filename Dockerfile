@@ -1,4 +1,4 @@
-# Etapa 1: instalar dependencias.
+# instalar dependencias.
 # better-sqlite3 se compila en C++, así que acá necesitamos python, make y g++.
 FROM node:24-slim AS dependencias
 
@@ -10,7 +10,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-# Etapa 2: imagen final, sin las herramientas de compilación (más liviana).
+# imagen final, sin las herramientas de compilación (más liviana).
 FROM node:24-slim
 
 WORKDIR /app
