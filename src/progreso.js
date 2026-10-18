@@ -3,6 +3,7 @@
 //
 // Casi todas las funciones reciben "usuario": { chatId, nombre, pesoObjetivo, metaKcal, metaAguaMl }
 // (lo arma obtenerUsuario en db.js), porque cada persona tiene sus propios datos y metas.
+// Las que leen la base son async; las de formato y cálculo puro, no.
 import {
   sumarDias,
   aguaDelDia,
@@ -102,18 +103,18 @@ function contarDiasSeguidos(fechas, desde) {
 }
 
 // Si hoy todavía no anotó nada, la racha sigue viva: se cuenta hasta ayer.
-function rachaComidas(usuario, fecha) {
-  const dias = diasConComidas(usuario.chatId);
+async function rachaComidas(usuario, fecha) {
+  const dias = await diasConComidas(usuario.chatId);
   return contarDiasSeguidos(dias, fecha) || contarDiasSeguidos(dias, sumarDias(fecha, -1));
 }
 
-function rachaAgua(usuario, fecha) {
-  return contarDiasSeguidos(diasConMetaDeAgua(usuario.chatId, usuario.metaAguaMl), fecha);
+async function rachaAgua(usuario, fecha) {
+  return contarDiasSeguidos(await diasConMetaDeAgua(usuario.chatId, usuario.metaAguaMl), fecha);
 }
 
 // Línea de racha para la primera comida del día: un logro si es un hito, o la racha si ya son 2+ días.
-function textoRachaComidas(usuario, fecha) {
-  const racha = rachaComidas(usuario, fecha);
+async function textoRachaComidas(usuario, fecha) {
+  const racha = await rachaComidas(usuario, fecha);
   if (HITOS_RACHA.includes(racha)) return `🏅 ¡Logro! ${racha} días seguidos anotando tus comidas`;
   if (racha >= 2) return `🔥 Racha: ${racha} días seguidos anotando`;
   return null;
@@ -137,7 +138,7 @@ function textoRachaComidas(usuario, fecha) {
 //   Calorías: 🟩🟩🟩🟩🟩🟩⬜⬜ 1.150 / 1.600
 //
 //   🔥 Racha: 6 días seguidos anotando
-export function mensajeComida({ usuario, encabezado, comida, fecha, descripcion = '', consejo = '', esPrimeraDelDia = false }) {
+export async function mensajeComida({ usuario, encabezado, comida, fecha, descripcion = '', consejo = '', esPrimeraDelDia = false }) {
   const { items, totales } = comida;
   const bloques = [encabezado];
 
@@ -148,10 +149,10 @@ export function mensajeComida({ usuario, encabezado, comida, fecha, descripcion 
       `Grasas ${Math.round(totales.grasa_g)} g · Fibra ${Math.round(totales.fibra_g)} g`
   );
   if (consejo) bloques.push(`💡 ${consejo}`);
-  bloques.push(lineaKcal(kcalDelDia(usuario.chatId, fecha), usuario));
+  bloques.push(lineaKcal(await kcalDelDia(usuario.chatId, fecha), usuario));
 
   // La racha se muestra solo con la primera comida del día, para no repetirla en cada mensaje.
-  const racha = esPrimeraDelDia ? textoRachaComidas(usuario, fecha) : null;
+  const racha = esPrimeraDelDia ? await textoRachaComidas(usuario, fecha) : null;
   if (racha) bloques.push(racha);
 
   return bloques.join('\n\n');
@@ -159,14 +160,14 @@ export function mensajeComida({ usuario, encabezado, comida, fecha, descripcion 
 
 // ---------- Agua ----------
 
-// Respuesta al tocar "+1 vaso". Festeja cuando cruza la meta del día.
-export function mensajeAgua(usuario, mlAntes, mlAhora, fecha) {
+// Respuesta al sumar agua. Festeja cuando cruza la meta del día.
+export async function mensajeAgua(usuario, mlAntes, mlAhora, fecha) {
   const lineas = [lineaAgua(mlAhora, usuario)];
 
   const cumplioRecien = mlAntes < usuario.metaAguaMl && mlAhora >= usuario.metaAguaMl;
   if (cumplioRecien) {
     lineas.push('', '🎉 ¡Cumpliste la meta de agua de hoy!');
-    const racha = rachaAgua(usuario, fecha);
+    const racha = await rachaAgua(usuario, fecha);
     if (HITOS_RACHA.includes(racha)) lineas.push(`🏅 ¡Logro! ${racha} días seguidos cumpliendo el agua`);
     else if (racha >= 2) lineas.push(`💧 Racha de agua: ${racha} días seguidos`);
   }
@@ -191,9 +192,9 @@ function textoMeta(kg, pesoInicial, objetivo) {
 
 // El peso sube y baja hasta 1-2 kg de un día al otro (agua, sal), así que el
 // promedio semanal muestra mejor si va bien. Devuelve null si faltan datos.
-function textoTendencia(usuario, fecha) {
-  const estaSemana = promedioPeso(usuario.chatId, sumarDias(fecha, -6), fecha);
-  const semanaAnterior = promedioPeso(usuario.chatId, sumarDias(fecha, -13), sumarDias(fecha, -7));
+async function textoTendencia(usuario, fecha) {
+  const estaSemana = await promedioPeso(usuario.chatId, sumarDias(fecha, -6), fecha);
+  const semanaAnterior = await promedioPeso(usuario.chatId, sumarDias(fecha, -13), sumarDias(fecha, -7));
   if (estaSemana === null || semanaAnterior === null) return null;
 
   const cambio = unDecimal(estaSemana - semanaAnterior);
@@ -235,7 +236,7 @@ function logrosDePeso(usuario, kg, pesoInicial, minimoAnterior) {
 //   Desde la última vez: -0,4 kg
 //
 //   🏅 ¡Ya bajaste 5 kg! 👏
-export function mensajePeso({ usuario, kg, fecha, pesoInicial, pesoAnterior, minimoAnterior }) {
+export async function mensajePeso({ usuario, kg, fecha, pesoInicial, pesoAnterior, minimoAnterior }) {
   const lineas = [`Anotado: ${enKg(kg)} kg ✅`, ''];
 
   if (pesoInicial === null) {
@@ -253,7 +254,7 @@ export function mensajePeso({ usuario, kg, fecha, pesoInicial, pesoAnterior, min
     lineas.push(textoMeta(kg, pesoInicial ?? kg, usuario.pesoObjetivo));
   }
 
-  const tendencia = textoTendencia(usuario, fecha);
+  const tendencia = await textoTendencia(usuario, fecha);
   if (tendencia) lineas.push(tendencia);
 
   if (pesoAnterior !== null) {
@@ -273,14 +274,14 @@ export function mensajePeso({ usuario, kg, fecha, pesoInicial, pesoAnterior, min
 // ---------- Contexto para Claude ----------
 
 // Resumen del día en texto para que Claude responda preguntas y dé consejos con datos reales.
-export function contextoDelDia(usuario, fechaHora) {
+export async function contextoDelDia(usuario, fechaHora) {
   const fecha = fechaHora.slice(0, 10);
-  const comidas = comidasDelDia(usuario.chatId, fecha);
+  const comidas = await comidasDelDia(usuario.chatId, fecha);
   const lineas = [`Persona: ${usuario.nombre ?? 'sin nombre'}.`, `Fecha y hora: ${fechaHora}.`];
 
   const metaKcal = usuario.metaKcal ? ` (meta: ${enKcal(usuario.metaKcal)} kcal)` : '';
-  lineas.push(`Calorías de hoy: ${enKcal(kcalDelDia(usuario.chatId, fecha))} kcal${metaKcal}.`);
-  lineas.push(`Agua de hoy: ${enLitros(aguaDelDia(usuario.chatId, fecha))} L (meta: ${enLitros(usuario.metaAguaMl)} L).`);
+  lineas.push(`Calorías de hoy: ${enKcal(await kcalDelDia(usuario.chatId, fecha))} kcal${metaKcal}.`);
+  lineas.push(`Agua de hoy: ${enLitros(await aguaDelDia(usuario.chatId, fecha))} L (meta: ${enLitros(usuario.metaAguaMl)} L).`);
 
   if (comidas.length > 0) {
     const detalle = comidas.map((comida) => `${comida.tipo_comida} (${comida.items.map((item) => item.nombre).join(', ')})`);
@@ -289,7 +290,7 @@ export function contextoDelDia(usuario, fechaHora) {
     lineas.push('Todavía no anotó comidas hoy.');
   }
 
-  const peso = ultimoPeso(usuario.chatId);
+  const peso = await ultimoPeso(usuario.chatId);
   if (peso !== null) {
     const meta = usuario.pesoObjetivo ? ` (meta: ${enKg(usuario.pesoObjetivo)} kg)` : '';
     lineas.push(`Último peso: ${enKg(peso)} kg${meta}.`);
@@ -299,22 +300,23 @@ export function contextoDelDia(usuario, fechaHora) {
 
 // ---------- Resúmenes ----------
 
-// Resumen del día: lo usan el comando /hoy y el mensaje de cada noche.
-export function resumenDelDia(usuario, fecha) {
-  const cantidad = comidasDelDia(usuario.chatId, fecha).length;
+// Resumen del día: lo usan el botón "¿Cómo voy?" y el mensaje de cada noche.
+export async function resumenDelDia(usuario, fecha) {
+  const { chatId } = usuario;
+  const cantidad = (await comidasDelDia(chatId, fecha)).length;
   const lineas = [];
 
   if (cantidad === 0) {
     lineas.push('Hoy todavía no anotaste comidas.');
   } else {
-    lineas.push(`Comidas anotadas: ${cantidad}`, lineaKcal(kcalDelDia(usuario.chatId, fecha), usuario));
+    lineas.push(`Comidas anotadas: ${cantidad}`, lineaKcal(await kcalDelDia(chatId, fecha), usuario));
   }
-  lineas.push(lineaAgua(aguaDelDia(usuario.chatId, fecha), usuario));
+  lineas.push(lineaAgua(await aguaDelDia(chatId, fecha), usuario));
 
-  const peso = ultimoPesoDelDia(usuario.chatId, fecha);
+  const peso = await ultimoPesoDelDia(chatId, fecha);
   if (peso) lineas.push(`Peso: ${enKg(peso.kg)} kg`);
 
-  const racha = rachaComidas(usuario, fecha);
+  const racha = await rachaComidas(usuario, fecha);
   if (racha >= 2) lineas.push(`🔥 Racha: ${racha} días seguidos anotando`);
 
   return lineas.join('\n');
@@ -322,15 +324,26 @@ export function resumenDelDia(usuario, fecha) {
 
 // Resumen de los últimos 7 días (terminando en "fecha"). Se escribe en forma neutra
 // porque también les llega a los demás. Devuelve null si no anotó nada en la semana.
-export function resumenSemanal(usuario, fecha) {
+export async function resumenSemanal(usuario, fecha) {
   const { chatId } = usuario;
   const desde = sumarDias(fecha, -6);
   const dias = Array.from({ length: 7 }, (_, i) => sumarDias(desde, i));
 
-  const diasAnotados = dias.filter((dia) => comidasDelDia(chatId, dia).length > 0);
-  const diasConAgua = dias.filter((dia) => aguaDelDia(chatId, dia) >= usuario.metaAguaMl);
-  const huboAgua = dias.some((dia) => aguaDelDia(chatId, dia) > 0);
-  const huboPeso = promedioPeso(chatId, desde, fecha) !== null;
+  // Juntamos los datos de cada día de la semana una sola vez.
+  const semana = [];
+  for (const dia of dias) {
+    semana.push({
+      dia,
+      comidas: (await comidasDelDia(chatId, dia)).length,
+      kcal: await kcalDelDia(chatId, dia),
+      agua: await aguaDelDia(chatId, dia),
+    });
+  }
+
+  const diasAnotados = semana.filter((d) => d.comidas > 0);
+  const diasConAgua = semana.filter((d) => d.agua >= usuario.metaAguaMl);
+  const huboAgua = semana.some((d) => d.agua > 0);
+  const huboPeso = (await promedioPeso(chatId, desde, fecha)) !== null;
   if (diasAnotados.length === 0 && !huboAgua && !huboPeso) return null;
 
   const lineas = [`📊 Resumen de la semana (${diaYMes(desde)} al ${diaYMes(fecha)})`, ''];
@@ -338,23 +351,23 @@ export function resumenSemanal(usuario, fecha) {
 
   // El promedio se calcula solo con los días anotados: un día sin anotar no es un día sin comer.
   if (diasAnotados.length > 0) {
-    const totalKcal = diasAnotados.reduce((suma, dia) => suma + kcalDelDia(chatId, dia), 0);
+    const totalKcal = diasAnotados.reduce((suma, d) => suma + d.kcal, 0);
     const meta = usuario.metaKcal ? ` (meta: ${enKcal(usuario.metaKcal)})` : '';
     lineas.push(`Promedio de calorías: ${enKcal(totalKcal / diasAnotados.length)} kcal por día${meta}`);
   }
   lineas.push(`Días con la meta de agua cumplida: ${diasConAgua.length} de 7`);
 
-  const tendencia = textoTendencia(usuario, fecha);
+  const tendencia = await textoTendencia(usuario, fecha);
   if (tendencia) lineas.push(tendencia);
 
-  const inicial = primerPeso(chatId);
-  const actual = ultimoPeso(chatId);
+  const inicial = await primerPeso(chatId);
+  const actual = await ultimoPeso(chatId);
   if (inicial !== null && actual !== null && inicial !== actual) {
     const cambio = unDecimal(actual - inicial);
     lineas.push(`Desde el inicio: ${cambio > 0 ? '+' : ''}${enKg(cambio)} kg`);
   }
 
-  const racha = rachaComidas(usuario, fecha);
+  const racha = await rachaComidas(usuario, fecha);
   if (racha >= 2) lineas.push(`🔥 Racha actual: ${racha} días seguidos anotando`);
 
   lineas.push('', diasAnotados.length >= 5 ? '¡Gran semana! Seguí así 💪' : 'Cada día que anotás suma. ¡Vamos por una gran semana! 💪');

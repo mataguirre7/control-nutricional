@@ -33,20 +33,29 @@ function diasEntre(desde, hasta) {
 }
 
 // Arma el JSON completo de un día de una persona.
-function armarDia(chatId, fecha) {
-  const comidas = comidasDelDia(chatId, fecha);
+async function armarDia(chatId, fecha) {
+  const comidas = await comidasDelDia(chatId, fecha);
   return {
     fecha,
     comidas,
-    agua_ml: aguaDelDia(chatId, fecha),
-    peso: ultimoPesoDelDia(chatId, fecha),
+    agua_ml: await aguaDelDia(chatId, fecha),
+    peso: await ultimoPesoDelDia(chatId, fecha),
     totales_dia: sumarNutrientes(comidas.map((comida) => comida.totales)),
   };
 }
 
-function datosDePersona(chatId) {
-  const usuario = obtenerUsuario(chatId);
+async function datosDePersona(chatId) {
+  const usuario = await obtenerUsuario(chatId);
   return { chat_id: chatId, nombre: usuario.nombre };
+}
+
+// Todos los días del rango de una persona, uno detrás del otro.
+async function diasDePersona(chatId, dias) {
+  const resultado = [];
+  for (const dia of dias) {
+    resultado.push(await armarDia(chatId, dia));
+  }
+  return resultado;
 }
 
 // Devuelve los chat_id a consultar según ?chat_id=…, o null si ya respondió con un error.
@@ -64,22 +73,23 @@ export function iniciarApi() {
   const app = express();
   app.use('/api', verificarApiKey);
 
-  app.get('/api/usuarios', (req, res) => {
-    const usuarios = config.telegramChatIds.map((chatId) => {
-      const usuario = obtenerUsuario(chatId);
-      return {
+  app.get('/api/usuarios', async (req, res) => {
+    const usuarios = [];
+    for (const chatId of config.telegramChatIds) {
+      const usuario = await obtenerUsuario(chatId);
+      usuarios.push({
         chat_id: chatId,
         nombre: usuario.nombre,
         registrado: usuario.registrado,
         peso_objetivo: usuario.pesoObjetivo,
         meta_kcal: usuario.metaKcal,
         meta_agua_ml: usuario.metaAguaMl,
-      };
-    });
+      });
+    }
     res.json(usuarios);
   });
 
-  app.get('/api/dia/:fecha', (req, res) => {
+  app.get('/api/dia/:fecha', async (req, res) => {
     const { fecha } = req.params;
     if (!esFechaValida(fecha)) {
       return res.status(400).json({ error: 'La fecha tiene que ser YYYY-MM-DD' });
@@ -87,13 +97,15 @@ export function iniciarApi() {
     const chatIds = personasPedidas(req, res);
     if (!chatIds) return;
 
-    if (req.query.chat_id !== undefined) {
-      return res.json({ ...datosDePersona(chatIds[0]), ...armarDia(chatIds[0], fecha) });
+    const personas = [];
+    for (const chatId of chatIds) {
+      personas.push({ ...(await datosDePersona(chatId)), ...(await armarDia(chatId, fecha)) });
     }
-    res.json({ fecha, usuarios: chatIds.map((chatId) => ({ ...datosDePersona(chatId), ...armarDia(chatId, fecha) })) });
+    if (req.query.chat_id !== undefined) return res.json(personas[0]);
+    res.json({ fecha, usuarios: personas });
   });
 
-  app.get('/api/rango', (req, res) => {
+  app.get('/api/rango', async (req, res) => {
     const { desde, hasta } = req.query;
     if (!esFechaValida(desde) || !esFechaValida(hasta)) {
       return res.status(400).json({ error: 'Usá ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD' });
@@ -108,11 +120,12 @@ export function iniciarApi() {
     const chatIds = personasPedidas(req, res);
     if (!chatIds) return;
 
-    const persona = (chatId) => ({ ...datosDePersona(chatId), dias: dias.map((dia) => armarDia(chatId, dia)) });
-    if (req.query.chat_id !== undefined) {
-      return res.json({ desde, hasta, ...persona(chatIds[0]) });
+    const personas = [];
+    for (const chatId of chatIds) {
+      personas.push({ ...(await datosDePersona(chatId)), dias: await diasDePersona(chatId, dias) });
     }
-    res.json({ desde, hasta, usuarios: chatIds.map(persona) });
+    if (req.query.chat_id !== undefined) return res.json({ desde, hasta, ...personas[0] });
+    res.json({ desde, hasta, usuarios: personas });
   });
 
   app.listen(config.port, () => {

@@ -34,9 +34,9 @@ function programar(hora, tarea, diaSemana = '*') {
 // nos deja escribirles). Si falla con una persona, las demás reciben igual.
 async function paraCadaPersona(nombreTarea, tarea) {
   for (const chatId of config.telegramChatIds) {
-    const usuario = obtenerUsuario(chatId);
-    if (!usuario.registrado) continue;
     try {
+      const usuario = await obtenerUsuario(chatId);
+      if (!usuario.registrado) continue;
       await tarea(usuario);
     } catch (error) {
       console.error(`Falló "${nombreTarea}" para el chat ${chatId}:`, error);
@@ -45,21 +45,21 @@ async function paraCadaPersona(nombreTarea, tarea) {
 }
 
 // ¿Ya hizo hoy lo que le íbamos a recordar? Así no la molestamos de más.
-function yaLoHizo(usuario, tipo, hoy) {
-  if (tipo === 'agua') return aguaDelDia(usuario.chatId, hoy) >= usuario.metaAguaMl;
-  if (tipo === 'peso') return ultimoPesoDelDia(usuario.chatId, hoy) !== null;
+async function yaLoHizo(usuario, tipo, hoy) {
+  if (tipo === 'agua') return (await aguaDelDia(usuario.chatId, hoy)) >= usuario.metaAguaMl;
+  if (tipo === 'peso') return (await ultimoPesoDelDia(usuario.chatId, hoy)) !== null;
   return hayComidaDelTipo(usuario.chatId, hoy, tipo);
 }
 
 async function enviarRecordatorio(bot, usuario, tipo) {
   const hoy = hoyLocal();
-  if (yaLoHizo(usuario, tipo, hoy)) {
+  if (await yaLoHizo(usuario, tipo, hoy)) {
     console.log(`Recordatorio de ${tipo} para ${usuario.chatId} salteado: ya lo hizo hoy`);
     return;
   }
 
   if (tipo === 'agua') {
-    const texto = `${MENSAJES.agua}\n\n${lineaAgua(aguaDelDia(usuario.chatId, hoy), usuario)}`;
+    const texto = `${MENSAJES.agua}\n\n${lineaAgua(await aguaDelDia(usuario.chatId, hoy), usuario)}`;
     await bot.api.sendMessage(usuario.chatId, texto, { reply_markup: tecladoAgua });
   } else {
     // Mandar los botones fijos con cada recordatorio asegura que siempre los tenga a mano.
@@ -69,12 +69,12 @@ async function enviarRecordatorio(bot, usuario, tipo) {
 
 async function enviarResumenDiario(bot, usuario) {
   const hoy = hoyLocal();
-  let texto = `🌙 Así fue tu día\n\n${resumenDelDia(usuario, hoy)}`;
+  let texto = `🌙 Así fue tu día\n\n${await resumenDelDia(usuario, hoy)}`;
 
   // El consejo para mañana es un extra: si Claude falla, el resumen sale igual.
-  if (comidasDelDia(usuario.chatId, hoy).length > 0) {
+  if ((await comidasDelDia(usuario.chatId, hoy)).length > 0) {
     try {
-      texto += `\n\n💡 ${await escribirConsejoParaManana(contextoDelDia(usuario, ahoraLocal()))}`;
+      texto += `\n\n💡 ${await escribirConsejoParaManana(await contextoDelDia(usuario, ahoraLocal()))}`;
     } catch (error) {
       console.error('No pude generar el consejo para mañana:', error);
     }
@@ -88,10 +88,12 @@ async function enviarResumenDiario(bot, usuario) {
 // Quien no anotó nada en la semana no tiene resumen (ni propio ni como copia).
 async function enviarResumenesSemanales(bot) {
   const hoy = hoyLocal();
-  const resumenes = config.telegramChatIds
-    .map((chatId) => obtenerUsuario(chatId))
-    .map((usuario) => ({ usuario, texto: resumenSemanal(usuario, hoy) }))
-    .filter((resumen) => resumen.texto !== null);
+  const resumenes = [];
+  for (const chatId of config.telegramChatIds) {
+    const usuario = await obtenerUsuario(chatId);
+    const texto = await resumenSemanal(usuario, hoy);
+    if (texto !== null) resumenes.push({ usuario, texto });
+  }
 
   await paraCadaPersona('resumen semanal', async (destinatario) => {
     const propio = resumenes.find((resumen) => resumen.usuario.chatId === destinatario.chatId);
@@ -115,7 +117,8 @@ export function iniciarRecordatorios(bot) {
     programar(hora, () => paraCadaPersona('resumen diario', (usuario) => enviarResumenDiario(bot, usuario)));
   }
   for (const hora of config.resumenSemanal) {
-    programar(hora, () => enviarResumenesSemanales(bot), '0');
+    // Si falla el armado de los resúmenes, se loguea y el resto del bot sigue andando.
+    programar(hora, () => enviarResumenesSemanales(bot).catch((error) => console.error('Falló el resumen semanal:', error)), '0');
   }
 
   console.log('Recordatorios programados:', config.recordatorios);

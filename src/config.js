@@ -5,8 +5,8 @@ dotenv.config({ quiet: true });
 
 export const ZONA_HORARIA = 'America/Argentina/Buenos_Aires';
 
-// Rutas relativas a donde se ejecuta el programa (en Docker es /app).
-export const CARPETA_DATOS = 'data';
+// Las fotos se guardan en disco (la base de datos es Postgres). Ruta relativa a donde
+// se ejecuta el programa (en Docker es /app).
 export const CARPETA_FOTOS = 'data/fotos';
 
 // Meta de agua para quien todavía no configuró la suya con /meta_agua.
@@ -19,6 +19,9 @@ export const VARIABLES_OBLIGATORIAS = [
   'ANTHROPIC_API_KEY',
   'USDA_API_KEY',
   'API_KEY',
+  'POSTGRES_DB',
+  'POSTGRES_USER',
+  'POSTGRES_PASSWORD',
 ];
 
 // Convierte "08:00,12:30" en ["08:00", "12:30"]. Sirve para cualquier lista separada por coma.
@@ -36,6 +39,16 @@ export const config = {
   apiKey: process.env.API_KEY,
   port: Number(process.env.PORT || 3000),
   vasoMl: Number(process.env.VASO_ML || 250),
+
+  // Conexión a Postgres. Dentro de Docker, docker-compose pone DB_HOST=db y DB_PORT=5432
+  // (el contenedor de la base). Corriendo en tu PC sin Docker, usa el puerto publicado.
+  db: {
+    host: process.env.DB_HOST || 'localhost',
+    port: Number(process.env.DB_PORT || process.env.DB_HOST_PORT || 15433),
+    database: process.env.POSTGRES_DB,
+    user: process.env.POSTGRES_USER,
+    password: process.env.POSTGRES_PASSWORD,
+  },
 
   // Resumen de cada noche y resumen semanal (este último, los domingos).
   resumenDiario: listaDeHorarios(process.env.RESUMEN_DIARIO || '22:30'),

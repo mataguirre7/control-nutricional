@@ -132,7 +132,7 @@ async function cambiarMeta(ctx, nombreMeta, valor) {
   const meta = METAS[nombreMeta];
 
   if (valor === 0) {
-    guardarMeta(ctx.usuario.chatId, meta.columna, null);
+    await guardarMeta(ctx.usuario.chatId, meta.columna, null);
     await ctx.reply(`Listo, saqué tu meta de ${meta.etiqueta} ✅`, { reply_markup: tecladoPrincipal });
     return;
   }
@@ -145,7 +145,7 @@ async function cambiarMeta(ctx, nombreMeta, valor) {
     return;
   }
 
-  guardarMeta(ctx.usuario.chatId, meta.columna, valor);
+  await guardarMeta(ctx.usuario.chatId, meta.columna, valor);
   await ctx.reply(`Listo, tu meta de ${meta.etiqueta} es ${meta.mostrar(valor)} ✅`, { reply_markup: tecladoPrincipal });
 }
 
@@ -159,9 +159,9 @@ async function sumarAgua(ctx, ml, opciones = {}) {
   }
   const { usuario } = ctx;
   const hoy = hoyLocal();
-  const mlAntes = aguaDelDia(usuario.chatId, hoy);
-  guardarAgua(usuario.chatId, ml);
-  await ctx.reply(mensajeAgua(usuario, mlAntes, mlAntes + ml, hoy), opciones);
+  const mlAntes = await aguaDelDia(usuario.chatId, hoy);
+  await guardarAgua(usuario.chatId, ml);
+  await ctx.reply(await mensajeAgua(usuario, mlAntes, mlAntes + ml, hoy), opciones);
 }
 
 async function registrarPeso(ctx, kg) {
@@ -172,11 +172,11 @@ async function registrarPeso(ctx, kg) {
     return;
   }
   // Se leen antes de guardar, para comparar contra los pesos anteriores y no contra este.
-  const pesoInicial = primerPeso(usuario.chatId);
-  const pesoAnterior = ultimoPeso(usuario.chatId);
-  const minimoAnterior = pesoMinimo(usuario.chatId);
-  guardarPeso(usuario.chatId, kg);
-  const mensaje = mensajePeso({ usuario, kg, fecha: hoyLocal(), pesoInicial, pesoAnterior, minimoAnterior });
+  const pesoInicial = await primerPeso(usuario.chatId);
+  const pesoAnterior = await ultimoPeso(usuario.chatId);
+  const minimoAnterior = await pesoMinimo(usuario.chatId);
+  await guardarPeso(usuario.chatId, kg);
+  const mensaje = await mensajePeso({ usuario, kg, fecha: hoyLocal(), pesoInicial, pesoAnterior, minimoAnterior });
   await ctx.reply(mensaje, { reply_markup: tecladoPrincipal });
 }
 
@@ -184,18 +184,18 @@ async function registrarComida(ctx, analisis, fechaHora, fotoPath) {
   const { usuario } = ctx;
   const comida = await calcularComida(analisis.items);
   const tipoComida = tipoComidaSegunHora(fechaHora);
-  const idComida = guardarComida({ chatId: usuario.chatId, fechaHora, tipoComida, fotoPath, ...comida });
+  const idComida = await guardarComida({ chatId: usuario.chatId, fechaHora, tipoComida, fotoPath, ...comida });
 
   // Usamos el día del mensaje: si llegó 23:59 y terminamos 00:00, sigue contando para ese día.
   const fecha = fechaHora.slice(0, 10);
-  const mensaje = mensajeComida({
+  const mensaje = await mensajeComida({
     usuario,
     encabezado: `Anotado: ${tipoComida} ~${Math.round(comida.totales.kcal)} kcal ✅`,
     comida,
     fecha,
     descripcion: analisis.descripcion,
     consejo: analisis.consejo,
-    esPrimeraDelDia: comidasDelDia(usuario.chatId, fecha).length === 1,
+    esPrimeraDelDia: (await comidasDelDia(usuario.chatId, fecha)).length === 1,
   });
   await ctx.reply(mensaje, { reply_markup: tecladoCorreccion(idComida) });
 }
@@ -221,7 +221,8 @@ async function responderAnalisis(ctx, analisis, fechaHora, fotoPath = null) {
 // Qué hace cada botón fijo. Se revisa antes de llamar a Claude, así tocar un botón no cuesta nada.
 const ACCIONES_DE_BOTONES = {
   [BOTONES.vaso]: (ctx) => sumarAgua(ctx, config.vasoMl),
-  [BOTONES.comoVoy]: (ctx) => ctx.reply(`📊 Tu día hasta ahora\n\n${resumenDelDia(ctx.usuario, hoyLocal())}`, { reply_markup: tecladoPrincipal }),
+  [BOTONES.comoVoy]: async (ctx) =>
+    ctx.reply(`📊 Tu día hasta ahora\n\n${await resumenDelDia(ctx.usuario, hoyLocal())}`, { reply_markup: tecladoPrincipal }),
   [BOTONES.metas]: (ctx) => ctx.reply(textoMetas(ctx.usuario), { reply_markup: tecladoPrincipal }),
   [BOTONES.ayuda]: (ctx) => ctx.reply(AYUDA, { reply_markup: tecladoPrincipal }),
 };
@@ -233,7 +234,7 @@ async function procesarFoto(ctx) {
   const imagen = await descargarFoto(ctx);
   const fotoPath = guardarFotoEnDisco(imagen, ctx.usuario.chatId, fechaHora, ctx.message.message_id);
   // Las fotos comprimidas de Telegram siempre llegan como JPEG.
-  const contexto = contextoDelDia(ctx.usuario, fechaHora);
+  const contexto = await contextoDelDia(ctx.usuario, fechaHora);
   const analisis = await analizarFoto(imagen, 'image/jpeg', contexto, ctx.message.caption);
   await responderAnalisis(ctx, analisis, fechaHora, fotoPath);
 }
@@ -256,14 +257,14 @@ async function procesarTexto(ctx) {
 
   await ctx.replyWithChatAction('typing');
   const fechaHora = ahoraLocal();
-  const analisis = await analizarTexto(texto, contextoDelDia(ctx.usuario, fechaHora));
+  const analisis = await analizarTexto(texto, await contextoDelDia(ctx.usuario, fechaHora));
   await responderAnalisis(ctx, analisis, fechaHora);
 }
 
 // Botones "Era menos" / "Era más": escala la porción y manda la comida corregida.
 async function corregirPorcion(ctx) {
   const [, accion, id] = ctx.match;
-  const comida = comidaPorId(ctx.usuario.chatId, Number(id));
+  const comida = await comidaPorId(ctx.usuario.chatId, Number(id));
   if (!comida) {
     await ctx.answerCallbackQuery({ text: 'Esa comida ya no está 🤔' });
     return;
@@ -271,10 +272,10 @@ async function corregirPorcion(ctx) {
 
   // 0.8 y 1.25 son inversos (0.8 × 1.25 = 1): tocar "menos" y después "más" vuelve al valor original.
   const corregida = escalarComida(comida, accion === 'mas' ? 1.25 : 0.8);
-  actualizarComida(comida.id, corregida.items, corregida.totales);
+  await actualizarComida(comida.id, corregida.items, corregida.totales);
   await ctx.answerCallbackQuery({ text: 'Corregido ✅' });
 
-  const mensaje = mensajeComida({
+  const mensaje = await mensajeComida({
     usuario: ctx.usuario,
     encabezado: `Corregido: ${comida.tipo_comida} ~${Math.round(corregida.totales.kcal)} kcal ✅`,
     comida: corregida,
@@ -297,9 +298,9 @@ export function crearBot() {
       console.log(`Mensaje ignorado de chat_id ${chatId}`);
       return;
     }
-    registrarUsuario(chatId, ctx.from?.first_name ?? null);
+    await registrarUsuario(chatId, ctx.from?.first_name ?? null);
     // Dejamos a la persona (con sus metas) en el contexto, para que cada handler sepa de quién son los datos.
-    ctx.usuario = obtenerUsuario(chatId);
+    ctx.usuario = await obtenerUsuario(chatId);
     await next();
   });
 
@@ -338,16 +339,16 @@ export function crearBot() {
   });
 
   bot.callbackQuery(/^borrar-si:(\d+)$/, async (ctx) => {
-    const comida = comidaPorId(ctx.usuario.chatId, Number(ctx.match[1]));
+    const comida = await comidaPorId(ctx.usuario.chatId, Number(ctx.match[1]));
     await ctx.editMessageReplyMarkup().catch(() => {});
     if (!comida) {
       await ctx.answerCallbackQuery({ text: 'Esa comida ya no está 🤔' });
       return;
     }
 
-    borrarComida(comida.id);
+    await borrarComida(comida.id);
     await ctx.answerCallbackQuery({ text: 'Borrada 🗑️' });
-    const kcal = kcalDelDia(ctx.usuario.chatId, comida.fecha_hora.slice(0, 10));
+    const kcal = await kcalDelDia(ctx.usuario.chatId, comida.fecha_hora.slice(0, 10));
     await ctx.reply(`Listo, borré esa comida 🗑️\n\n${lineaKcal(kcal, ctx.usuario)}`, { reply_markup: tecladoPrincipal });
   });
 

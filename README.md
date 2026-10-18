@@ -60,7 +60,7 @@ El bot solo le responde a los chats que configures, así que necesitás el núme
 cp .env.example .env
 ```
 
-Abrí `.env` y completá las cinco variables obligatorias:
+Abrí `.env` y completá las variables obligatorias:
 
 | Variable | Qué es |
 |---|---|
@@ -69,6 +69,9 @@ Abrí `.env` y completá las cinco variables obligatorias:
 | `ANTHROPIC_API_KEY` | Key de Anthropic (paso 4) |
 | `USDA_API_KEY` | Key de USDA (paso 3) |
 | `API_KEY` | Una clave que inventás vos para proteger la API REST |
+| `POSTGRES_DB` | Nombre de la base (ej: `nutricion`) |
+| `POSTGRES_USER` | Usuario de la base (ej: `nutricion`) |
+| `POSTGRES_PASSWORD` | Contraseña de la base: inventá una larga. Se fija la primera vez que arranca la base |
 
 Las opcionales ya tienen valores por defecto:
 
@@ -76,6 +79,7 @@ Las opcionales ya tienen valores por defecto:
 |---|---|---|
 | `CLAUDE_MODEL` | `claude-sonnet-5-5` | Modelo de Claude que analiza las fotos |
 | `PORT` | `3000` | Puerto de la API |
+| `DB_HOST_PORT` | `15433` | Puerto de la base en el server (solo `127.0.0.1`; ver "Acceso a la base") |
 | `VASO_ML` | `250` | Mililitros que suma cada "+1 vaso" |
 | `RESUMEN_DIARIO` | `22:30` | Hora del resumen de cada noche |
 | `RESUMEN_SEMANAL` | `20:00` | Hora del resumen semanal (los domingos) |
@@ -268,7 +272,7 @@ El comando imprime lo que devolvió Claude (`analisis_claude`) y, si la foto es 
 src/
   index.js        # arranca bot, API y recordatorios
   config.js       # lee el .env y valida las variables
-  db.js           # tablas SQLite y funciones de lectura/escritura
+  db.js           # tablas de Postgres y funciones de lectura/escritura (todas async)
   bot.js          # handlers de Telegram (fotos, textos, botones, comandos)
   vision.js       # llamadas a Claude: analizar fotos/textos (JSON estricto) y consejo del día
   nutrition.js    # búsqueda en USDA, cálculo por gramos y corrección de porciones
@@ -276,19 +280,32 @@ src/
   reminders.js    # recordatorios inteligentes y resúmenes con node-cron
   api.js          # endpoints de Express
   probar-foto.js  # script para probar una foto desde la consola
-data/             # nutricion.db y fotos/ (no se sube a git)
+  importar-sqlite.js  # herramienta de una sola vez: pasa los datos de la base SQLite vieja a Postgres
+data/fotos/       # fotos de las comidas (no se sube a git)
 ```
+
+La base de datos es **Postgres** y corre en su propio contenedor (`db`), con los datos en el volumen de Docker `db_data`. Tiene 5 tablas: `usuarios`, `comidas`, `comida_items`, `agua` y `peso`. Cada registro guarda el `chat_id` de la persona.
 
 Así se procesa una foto de comida:
 
 1. [bot.js](src/bot.js) descarga la foto de Telegram y la guarda en `data/fotos/`.
 2. [vision.js](src/vision.js) se la manda a Claude, que devuelve `tipo`, `kg` e `items`. Cada item trae nombre, término en inglés, gramos, confianza y nutrientes estimados.
 3. [nutrition.js](src/nutrition.js) busca cada item en USDA. Primero prueba con los tipos *Foundation* y *SR Legacy*. Si no encuentra nada, prueba con *Survey (FNDDS)*. Toma el primer resultado y escala los valores, que USDA da cada 100 g, a los gramos estimados. Si ninguna búsqueda da resultado, usa la estimación de Claude.
-4. [db.js](src/db.js) guarda la comida y sus items.
+4. [db.js](src/db.js) guarda la comida y sus items en Postgres.
 
 ### Backup
 
-Todo está en la carpeta `data/`. Para hacer un backup alcanza con copiarla, idealmente con el sistema parado (`docker compose stop`).
+Son dos cosas: la base (con `pg_dump`) y las fotos (la carpeta `data/`). Este cron en el server hace las dos todos los días a las 4 AM y borra los backups de más de 30 días (`mkdir -p ~/backups` y después `crontab -e`):
+
+```
+0 4 * * * cd $HOME/control-nutricional && docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip > $HOME/backups/nutricion-$(date +\%F).sql.gz && tar czf $HOME/backups/fotos-$(date +\%F).tar.gz data && find $HOME/backups -mtime +30 -delete
+```
+
+Para restaurar un backup en una base vacía:
+
+```bash
+gunzip -c ~/backups/nutricion-AAAA-MM-DD.sql.gz | docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"'
+```
 
 ---
 
@@ -307,3 +324,40 @@ La API solo escucha dentro del servidor (`127.0.0.1`). Para consultarla desde tu
 ssh -N -L 3000:127.0.0.1:3000 usuario@IP
 curl -H "x-api-key: TU_API_KEY" http://localhost:3000/api/usuarios
 ```
+
+### Acceso a la base (DBeaver por Tailscale)
+
+La base solo escucha en `127.0.0.1:15433` del server (invisible desde internet; Docker se saltea UFW, así que nunca `0.0.0.0`). Para entrar desde un cliente SQL se usa **Tailscale**: el server reenvía ese puerto a la red privada.
+
+Una sola vez por server (queda guardado y sobrevive reinicios):
+
+```bash
+sudo tailscale serve --bg --tcp 15433 tcp://127.0.0.1:15433
+tailscale serve status   # tiene que listar el 15433
+```
+
+En **DBeaver**: nueva conexión **PostgreSQL**, host = IP de Tailscale del server (`tailscale ip -4`), puerto `15433`, base `POSTGRES_DB`, usuario `POSTGRES_USER` y contraseña `POSTGRES_PASSWORD` del `.env`. La PC tiene que tener Tailscale abierto y estar en la misma red de Tailscale.
+
+> Las fechas (`fecha_hora`) están en hora argentina, sin zona horaria. Los nutrientes están en columnas JSON (`totales_json`, `nutrientes_json`); en SQL se leen así: `totales_json->>'kcal'`.
+
+### Migración desde SQLite (una sola vez)
+
+Las versiones anteriores guardaban todo en `data/nutricion.db` (SQLite). Para pasar esos datos a Postgres:
+
+1. **Con la versión vieja todavía instalada**, apagar el bot y exportar la base a un JSON:
+   ```bash
+   docker compose stop
+   docker compose run --rm -T --no-deps control-nutricional node - <<'EOF'
+   const { DatabaseSync } = require('node:sqlite');
+   const db = new DatabaseSync('data/nutricion.db', { readOnly: true });
+   const tablas = ['usuarios', 'comidas', 'comida_items', 'agua', 'peso'];
+   const datos = Object.fromEntries(tablas.map((t) => [t, db.prepare(`SELECT * FROM ${t}`).all()]));
+   require('fs').writeFileSync('data/exportacion-sqlite.json', JSON.stringify(datos, null, 1));
+   console.log('Exportado:', Object.entries(datos).map(([t, f]) => `${t} ${f.length}`).join(' · '));
+   EOF
+   ```
+2. Agregar `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` y `DB_HOST_PORT` al `.env`.
+3. Actualizar y levantar: `git pull && docker compose up -d --build`.
+4. Importar: `docker compose exec control-nutricional npm run importar-sqlite -- data/exportacion-sqlite.json`
+
+El importador conserva los ids originales y se puede correr más de una vez sin duplicar nada. Los registros sin `chat_id` (de cuando el bot era de una sola persona) no se pasan.

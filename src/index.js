@@ -1,10 +1,20 @@
 // Punto de entrada: arranca el bot, la API y los recordatorios.
 import { verificarVariables, VARIABLES_OBLIGATORIAS } from './config.js';
+import { prepararBase, cerrarBase } from './db.js';
 import { crearBot } from './bot.js';
 import { iniciarRecordatorios } from './reminders.js';
 import { iniciarApi } from './api.js';
 
 verificarVariables(VARIABLES_OBLIGATORIAS);
+
+// Crea las tablas si no existen. Si la base no responde (todavía arrancando, contraseña
+// mal), cortamos el proceso con un mensaje claro y Docker lo vuelve a intentar.
+try {
+  await prepararBase();
+} catch (error) {
+  console.error('No me pude conectar a la base de datos. ¿Están bien las variables POSTGRES_* del .env?', error.message);
+  process.exit(1);
+}
 
 const bot = crearBot();
 iniciarRecordatorios(bot);
@@ -44,6 +54,7 @@ process.on('unhandledRejection', (error) => {
 for (const senal of ['SIGINT', 'SIGTERM']) {
   process.once(senal, async () => {
     await bot.stop();
+    await cerrarBase();
     process.exit(0);
   });
 }

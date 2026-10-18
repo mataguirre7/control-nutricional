@@ -1,10 +1,42 @@
 services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    # Solo en 127.0.0.1 del server: invisible desde internet (Docker se saltea UFW, así que nunca
+    # 0.0.0.0). Para entrar desde DBeaver, Tailscale lo reenvía a la red privada con
+    # `tailscale serve --bg --tcp 15433 tcp://127.0.0.1:15433` (ver README → Acceso a la base).
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-15433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   control-nutricional:
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
       - TZ=America/Argentina/Buenos_Aires
+      # Dentro de Docker, la base se llama "db" y escucha en su puerto interno 5432.
+      - DB_HOST=db
+      - DB_PORT=5432
+    # Arranca recién cuando la base está lista para recibir conexiones.
+    depends_on:
+      db:
+        condition: service_healthy
     # DNS públicos, algunos routers hogareños no resuelven api.nal.usda.gov (USDA).
     dns:
       - 1.1.1.1
@@ -20,5 +52,8 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      # la base de datos y las fotos quedan en la carpeta data/ de tu máquina.
+      # Las fotos quedan en la carpeta data/ de tu máquina (la base está en el volumen db_data).
       - ./data:/app/data
+
+volumes:
+  db_data:
