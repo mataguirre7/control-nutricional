@@ -29,7 +29,7 @@ Ejemplo: "Peso 105 kilos, quiero llegar a 85, comer 1600 calorías por día y to
 - "minutos": lo que duró. Si no lo dice, asumí 30.
 - "kcal": solo lo que gastó DE MÁS por hacer ese ejercicio, sin contar lo que igual gastaría en reposo (eso ya está en su metabolismo basal). Calculalo con (MET - 1) × kilos × horas, con su último peso del contexto o 75 kg si no figura. Elegí un MET conservador: es mejor quedarse corto que hacerle creer que quemó de más.
 
-"datos" son sus datos personales si los menciona: "sexo" ("mujer" u "hombre"), "edad" en años y "altura_cm" en centímetros (1,65 m = 165).
+"datos" son sus datos personales si los menciona: "sexo" ("mujer" u "hombre"), "edad" en años, "altura_cm" en centímetros (1,65 m = 165) y "actividad", que es cuánto se mueve en su rutina diaria, sin contar el ejercicio: "poca" (casi todo el día sentado/a), "media" (parte del día de pie o caminando) o "mucha" (trabajo físico o todo el día en movimiento).
 
 "calcular_tmb" va en true si quiere calcular o saber su TMB o su metabolismo basal, o si da datos personales para eso. En ese caso no le pidas datos en "respuesta": el bot le hace las preguntas que falten.
 
@@ -74,8 +74,9 @@ const ESQUEMA_ANALISIS = {
         sexo: { anyOf: [{ type: 'string', enum: ['mujer', 'hombre'] }, { type: 'null' }] },
         edad: NUMERO_O_NULL,
         altura_cm: NUMERO_O_NULL,
+        actividad: { anyOf: [{ type: 'string', enum: ['poca', 'media', 'mucha'] }, { type: 'null' }] },
       },
-      required: ['sexo', 'edad', 'altura_cm'],
+      required: ['sexo', 'edad', 'altura_cm', 'actividad'],
       additionalProperties: false,
     },
     calcular_tmb: { type: 'boolean' },

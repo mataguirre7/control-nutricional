@@ -150,7 +150,8 @@ No hace falta saber comandos. Abajo del chat quedan siempre 4 botones grandes, y
 | Toca **🎯 Mis metas**, o escribe "quiero llegar a 85 kilos" | Muestra o cambia sus metas |
 | Toca **❓ Ayuda** | Le recuerda todo lo que puede mandar |
 | Pregunta algo ("¿qué puedo cenar?") | Claude le responde usando lo que ya comió y sus metas |
-| Toca **🔥 Mi TMB** o escribe "quiero calcular mi TMB" | Pregunta lo que falte (sexo, edad, altura, peso) y muestra su metabolismo basal. Si da todos los datos en un mensaje, no pregunta nada |
+| Toca **🔥 Mi TMB** o escribe "quiero calcular mi TMB" | Pregunta lo que falte (sexo, edad, altura, actividad diaria, peso) y muestra su metabolismo basal. Si da todos los datos en un mensaje, no pregunta nada |
+| Toca **📅 Resumen semanal** | Muestra los últimos 7 días: el suyo y el de los demás, igual que el envío de los domingos |
 | Toca **🏃 Hice ejercicio** o escribe "caminé 40 minutos" | Lo anota con una estimación de las calorías gastadas de más, y lo puede borrar |
 | Cuenta varias cosas juntas ("peso 98, quiero llegar a 75, tomé 3 vasos y almorcé empanadas") | Anota todo: primero las metas y después el peso, el agua y la comida |
 
@@ -170,14 +171,14 @@ Los horarios son los mismos para todos, pero cada persona recibe lo suyo, con su
 Todo son estimaciones, y el bot lo aclara.
 
 - **TMB** (Mifflin-St Jeor): `10 × kg + 6,25 × cm − 5 × edad`, más 5 en hombres o menos 161 en mujeres. Usa el peso que tenía la persona ese día.
-- **Gasto total (TDEE)**: `TMB × 1,2 + ejercicio`. El 1,2 corresponde a una vida mayormente sedentaria e incluye la actividad cotidiana y la digestión. El ejercicio cuenta solo lo gastado de más: `(MET − 1) × kg × horas`.
+- **Gasto total (TDEE)**: `TMB × factor + ejercicio`. El factor incluye la actividad cotidiana y la digestión, y cada persona lo elige en el chat: poca (1,2), media (1,3) o mucha (1,4); hasta que elija, se usa 1,2. Describe solo la rutina diaria. Por eso es más bajo que los factores habituales (1,375, 1,55...), que ya incluyen ejercicio. El ejercicio se suma aparte, y solo lo gastado de más: `(MET − 1) × kg × horas`.
 - **Saldo del día**: `TDEE − consumidas`. Positivo es déficit; negativo, superávit.
 
 **Progreso de grasa:** la referencia es 7.700 kcal de déficit neto = 1 kg de grasa teórica.
 
 - El día se cierra con el resumen de la noche y queda en `balance_diario`, con una fila por persona y día, así que no se puede contar dos veces.
-- Los días sin comidas anotadas no cuentan. Los que quedaron sin cerrar (por ejemplo, con el bot apagado) se cierran al arrancar y a las 00:05.
-- El acumulado es la suma de esa tabla. Si se cambia un registro anterior, se recalcula ese día; si se cambian sexo, edad o altura, todo el historial.
+- Los días con menos de 2 comidas anotadas no cuentan, porque lo más probable es que falte anotar algo. Los que quedaron sin cerrar (por ejemplo, con el bot apagado) se cierran al arrancar y a las 00:05.
+- El acumulado es la suma de esa tabla. Si se cambia un registro anterior, se recalcula ese día; si se cambian sexo, edad, altura o actividad, todo el historial.
 - Los hitos (`hitos_grasa`) se recalculan desde el historial: un superávit posterior no borra un hito logrado, pero corregir un dato equivocado sí puede sacarlo.
 
 ### Controlar las notificaciones

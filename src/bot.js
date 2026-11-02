@@ -38,6 +38,7 @@ import {
   mensajeEjercicio,
   textoTmb,
   textoProgresoGrasa,
+  resumenesSemanalesPara,
   actualizarSiCorresponde,
   recalcularHistorial,
   lineaKcal,
@@ -55,6 +56,7 @@ const BOTONES = {
   comoVoy: '📊 ¿Cómo voy?',
   ejercicio: '🏃 Hice ejercicio',
   tmb: '🔥 Mi TMB',
+  semana: '📅 Resumen semanal',
   metas: '🎯 Mis metas',
   ayuda: '❓ Ayuda',
 };
@@ -67,7 +69,9 @@ export const tecladoPrincipal = new Keyboard()
   .text(BOTONES.ejercicio)
   .text(BOTONES.tmb)
   .row()
+  .text(BOTONES.semana)
   .text(BOTONES.metas)
+  .row()
   .text(BOTONES.ayuda)
   .resized()
   .persistent();
@@ -269,6 +273,16 @@ async function hacerPreguntaTmb(ctx, pregunta) {
     await ctx.reply('¿Cuántos años tenés?', { reply_markup: botonCancelarTmb });
   } else if (pregunta === 'altura') {
     await ctx.reply('¿Cuánto medís? (ej: 1,65)', { reply_markup: botonCancelarTmb });
+  } else if (pregunta === 'actividad') {
+    const botones = new InlineKeyboard()
+      .text('🛋️ Poca: casi todo sentado/a', 'tmb-actividad:poca')
+      .row()
+      .text('🚶 Media: parte de pie o caminando', 'tmb-actividad:media')
+      .row()
+      .text('💪 Mucha: trabajo físico o sin parar', 'tmb-actividad:mucha')
+      .row()
+      .text('❌ Dejar para después', 'tmb-cancelar');
+    await ctx.reply('¿Cuánto te movés en un día normal, sin contar el ejercicio? (el ejercicio lo anotamos aparte)', { reply_markup: botones });
   } else {
     await ctx.reply('¿Cuánto pesás hoy? (ej: 72.5)', { reply_markup: botonCancelarTmb });
   }
@@ -284,6 +298,7 @@ async function continuarTmb(ctx) {
   if (!usuario.sexo) falta = 'sexo';
   else if (!usuario.anioNacimiento) falta = 'edad';
   else if (!usuario.alturaCm) falta = 'altura';
+  else if (!usuario.actividad) falta = 'actividad';
   else if (kg === null) falta = 'peso';
 
   await guardarDatoDeUsuario(usuario.chatId, 'pregunta_pendiente', falta);
@@ -338,6 +353,10 @@ async function responderPreguntaTmb(ctx, pregunta, texto) {
     const altura = enCentimetros(numero);
     if (!estaEnRango(altura, LIMITES_TMB.altura)) return false;
     await guardarDatoDeUsuario(chatId, 'altura_cm', altura);
+  } else if (pregunta === 'actividad') {
+    const actividad = /poca|poco|sentad|sedentari/i.test(texto) ? 'poca' : /media|medio|moderad/i.test(texto) ? 'media' : /mucha|mucho|f[ií]sico/i.test(texto) ? 'mucha' : null;
+    if (!actividad) return false;
+    await guardarDatoDeUsuario(chatId, 'actividad', actividad);
   } else {
     if (!estaEnRango(numero, LIMITES_TMB.peso)) return false;
     await registrarPeso(ctx, numero);
@@ -361,6 +380,10 @@ async function guardarDatosPersonales(ctx, datos) {
   }
   if (estaEnRango(datos.altura_cm, LIMITES_TMB.altura)) {
     await guardarDatoDeUsuario(chatId, 'altura_cm', datos.altura_cm);
+    huboDatos = true;
+  }
+  if (datos.actividad) {
+    await guardarDatoDeUsuario(chatId, 'actividad', datos.actividad);
     huboDatos = true;
   }
   return huboDatos;
@@ -410,6 +433,16 @@ const ACCIONES_DE_BOTONES = {
       reply_markup: tecladoPrincipal,
     }),
   [BOTONES.tmb]: (ctx) => continuarTmb(ctx),
+  [BOTONES.semana]: async (ctx) => {
+    const resumenes = await resumenesSemanalesPara(ctx.usuario.chatId, hoyLocal());
+    if (resumenes.length === 0) {
+      await ctx.reply('Todavía no hay nada anotado esta semana 🙂', { reply_markup: tecladoPrincipal });
+      return;
+    }
+    for (const texto of resumenes) {
+      await ctx.reply(texto, { reply_markup: tecladoPrincipal });
+    }
+  },
   [BOTONES.metas]: (ctx) => ctx.reply(textoMetas(ctx.usuario), { reply_markup: tecladoPrincipal }),
   [BOTONES.ayuda]: (ctx) => ctx.reply(AYUDA, { reply_markup: tecladoPrincipal }),
 };
@@ -513,6 +546,7 @@ export function crearBot() {
   bot.command('hoy', ACCIONES_DE_BOTONES[BOTONES.comoVoy]);
   bot.command('metas', ACCIONES_DE_BOTONES[BOTONES.metas]);
   bot.command('tmb', ACCIONES_DE_BOTONES[BOTONES.tmb]);
+  bot.command('semana', ACCIONES_DE_BOTONES[BOTONES.semana]);
   bot.command('agua', (ctx) => sumarAgua(ctx, config.vasoMl));
   bot.command('meta_peso', (ctx) => cambiarMeta(ctx, 'peso', numeroDelComando(ctx)));
   bot.command('meta_kcal', (ctx) => cambiarMeta(ctx, 'kcal', numeroDelComando(ctx)));
@@ -530,6 +564,13 @@ export function crearBot() {
     await continuarTmb(ctx);
   });
 
+  bot.callbackQuery(/^tmb-actividad:(poca|media|mucha)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageReplyMarkup().catch(() => {});
+    await guardarDatoDeUsuario(ctx.usuario.chatId, 'actividad', ctx.match[1]);
+    await continuarTmb(ctx);
+  });
+
   bot.callbackQuery('tmb-cancelar', async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.editMessageReplyMarkup().catch(() => {});
@@ -537,11 +578,11 @@ export function crearBot() {
     await ctx.reply('Listo, lo dejamos para después. Lo que ya me contaste queda guardado: cuando quieras tocá "🔥 Mi TMB" 👍', { reply_markup: tecladoPrincipal });
   });
 
-  // Se vuelven a preguntar sexo, edad y altura. El peso no: siempre se usa el último anotado.
+  // Se vuelven a preguntar sexo, edad, altura y actividad. El peso no: se usa el último anotado.
   bot.callbackQuery('tmb-actualizar', async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.editMessageReplyMarkup().catch(() => {});
-    for (const columna of ['sexo', 'anio_nacimiento', 'altura_cm']) {
+    for (const columna of ['sexo', 'anio_nacimiento', 'altura_cm', 'actividad']) {
       await guardarDatoDeUsuario(ctx.usuario.chatId, columna, null);
     }
     await continuarTmb(ctx);

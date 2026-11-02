@@ -8,7 +8,7 @@ import {
   lineaAgua,
   contextoDelDia,
   resumenDelDia,
-  resumenSemanal,
+  resumenesSemanalesPara,
   balanceDelDia,
   cerrarDia,
   cerrarDiasPendientes,
@@ -110,25 +110,11 @@ async function enviarResumenDiario(bot, usuario) {
   console.log(`Notificación enviada: resumen diario a ${usuario.chatId}`);
 }
 
-// Cada persona recibe primero su resumen y después el de los demás, para acompañarse entre todos.
-// Quien no anotó nada en la semana no tiene resumen (ni propio ni como copia).
 export async function enviarResumenesSemanales(bot) {
   const hoy = hoyLocal();
-  const resumenes = [];
-  for (const chatId of config.telegramChatIds) {
-    const usuario = await obtenerUsuario(chatId);
-    const texto = await resumenSemanal(usuario, hoy);
-    if (texto !== null) resumenes.push({ usuario, texto });
-  }
-
   await paraCadaPersona('resumen semanal', async (destinatario) => {
-    const propio = resumenes.find((resumen) => resumen.usuario.chatId === destinatario.chatId);
-    if (propio) {
-      await bot.api.sendMessage(destinatario.chatId, propio.texto);
-    }
-    for (const { usuario, texto } of resumenes) {
-      if (usuario.chatId === destinatario.chatId) continue;
-      await bot.api.sendMessage(destinatario.chatId, `👨‍👩‍👧 Así le fue a ${usuario.nombre ?? 'otro integrante'} esta semana\n\n${texto}`);
+    for (const texto of await resumenesSemanalesPara(destinatario.chatId, hoy)) {
+      await bot.api.sendMessage(destinatario.chatId, texto);
     }
     console.log(`Notificación enviada: resumen semanal a ${destinatario.chatId}`);
   });

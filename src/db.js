@@ -133,6 +133,7 @@ export async function prepararBase() {
     ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sexo TEXT;
     ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS anio_nacimiento INTEGER;
     ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS altura_cm DOUBLE PRECISION;
+    ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS actividad TEXT;
     ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS pregunta_pendiente TEXT;
   `);
 }
@@ -187,11 +188,12 @@ export async function obtenerUsuario(chatId) {
     sexo: usuario?.sexo ?? null,
     anioNacimiento: usuario?.anio_nacimiento ?? null,
     alturaCm: usuario?.altura_cm ?? null,
+    actividad: usuario?.actividad ?? null,
     preguntaPendiente: usuario?.pregunta_pendiente ?? null,
   };
 }
 
-const COLUMNAS_DE_USUARIO = ['peso_objetivo', 'meta_kcal', 'meta_agua_ml', 'sexo', 'anio_nacimiento', 'altura_cm', 'pregunta_pendiente'];
+const COLUMNAS_DE_USUARIO = ['peso_objetivo', 'meta_kcal', 'meta_agua_ml', 'sexo', 'anio_nacimiento', 'altura_cm', 'actividad', 'pregunta_pendiente'];
 
 // Guarda un dato de la persona (una meta, su altura...). valor null lo borra.
 export async function guardarDatoDeUsuario(chatId, columna, valor) {
@@ -335,14 +337,16 @@ export async function historialBalance(chatId) {
   return filas('SELECT * FROM balance_diario WHERE chat_id = $1 ORDER BY fecha', [chatId]);
 }
 
-// Días con comidas anotadas hasta "hasta" que todavía no se cerraron.
-export async function diasPendientesDeCierre(chatId, hasta) {
+// Días hasta "hasta" con al menos "minimoComidas" comidas anotadas que todavía no se cerraron.
+export async function diasPendientesDeCierre(chatId, hasta, minimoComidas) {
   const dias = await filas(
-    `SELECT DISTINCT c.fecha_hora::date AS fecha FROM comidas c
+    `SELECT c.fecha_hora::date AS fecha FROM comidas c
      WHERE c.chat_id = $1 AND c.fecha_hora::date <= $2
        AND NOT EXISTS (SELECT 1 FROM balance_diario b WHERE b.chat_id = c.chat_id AND b.fecha = c.fecha_hora::date)
+     GROUP BY c.fecha_hora::date
+     HAVING COUNT(*) >= $3
      ORDER BY fecha`,
-    [chatId, hasta]
+    [chatId, hasta, minimoComidas]
   );
   return dias.map((dia) => dia.fecha);
 }

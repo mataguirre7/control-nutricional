@@ -4,8 +4,10 @@
 // Casi todas las funciones reciben "usuario": { chatId, nombre, pesoObjetivo, metaKcal, metaAguaMl }
 // (lo arma obtenerUsuario en db.js), porque cada persona tiene sus propios datos y metas.
 // Las que leen la base son async; las de formato y cálculo puro, no.
+import { config } from './config.js';
 import {
   sumarDias,
+  obtenerUsuario,
   aguaDelDia,
   diasConMetaDeAgua,
   kcalDelDia,
@@ -33,9 +35,23 @@ const HITOS_RACHA = [3, 7, 14, 21, 30, 60, 90, 180, 365];
 // Referencia aproximada: 7.700 kcal de déficit neto equivalen a 1 kg de grasa corporal.
 const KCAL_POR_KILO_DE_GRASA = 7700;
 
-// Factor de un estilo de vida mayormente sedentario: TMB × 1,2 ya incluye la actividad
-// cotidiana y la digestión. El ejercicio anotado se suma aparte, y solo lo que se gastó de más.
-const FACTOR_ACTIVIDAD = 1.2;
+// Factor que multiplica a la TMB según la rutina diaria (incluye también la digestión).
+// Describe solo la rutina, SIN ejercicio: el ejercicio se anota y se suma aparte. Por eso son más
+// bajos que los factores habituales (1,375, 1,55...), que ya lo incluyen y lo contarían dos veces.
+export const NIVELES_DE_ACTIVIDAD = {
+  poca: { factor: 1.2, texto: 'poca actividad diaria' },
+  media: { factor: 1.3, texto: 'actividad diaria media' },
+  mucha: { factor: 1.4, texto: 'mucha actividad diaria' },
+};
+
+// Quien todavía no eligió se considera mayormente sedentario.
+function factorDeActividad(usuario) {
+  return NIVELES_DE_ACTIVIDAD[usuario.actividad]?.factor ?? NIVELES_DE_ACTIVIDAD.poca.factor;
+}
+
+// Un día cuenta para el progreso solo con esta cantidad de comidas o más: con menos,
+// lo más probable es que falte anotar algo y el déficit sería irreal.
+const MINIMO_COMIDAS_PARA_CONTAR = 2;
 
 // Por debajo de esta diferencia (en kcal) el día se considera en equilibrio: la estimación no da para más.
 const MARGEN_EQUILIBRIO = 100;
@@ -107,9 +123,9 @@ export function textoTmb(usuario, kg, fecha) {
     `🔥 Tu TMB es de ~${enKcal(calcularTmb(usuario, kg, fecha))} kcal por día`,
     '',
     'Es lo que tu cuerpo gasta en reposo. Se actualiza sola cada vez que anotás tu peso.',
-    `Sumando la actividad de todos los días y la digestión, gastás unas ${enKcal(calcularTmb(usuario, kg, fecha) * FACTOR_ACTIVIDAD)} kcal por día, sin contar el ejercicio (es una estimación).`,
+    `Sumando la actividad de todos los días y la digestión, gastás unas ${enKcal(calcularTmb(usuario, kg, fecha) * factorDeActividad(usuario))} kcal por día, sin contar el ejercicio (es una estimación).`,
     '',
-    `Datos: ${usuario.sexo}, ${edad} años, ${altura} m, ${enKg(kg)} kg`,
+    `Datos: ${usuario.sexo}, ${edad} años, ${altura} m, ${enKg(kg)} kg, ${NIVELES_DE_ACTIVIDAD[usuario.actividad].texto}`,
   ].join('\n');
 }
 
@@ -123,8 +139,9 @@ export async function datosBalance(usuario, fecha) {
   const ejercicios = await ejerciciosDelDia(usuario.chatId, fecha);
   const consumidas = await kcalDelDia(usuario.chatId, fecha);
   const quemadas = ejercicios.reduce((suma, ejercicio) => suma + ejercicio.kcal, 0);
-  const tdee = tmb * FACTOR_ACTIVIDAD + quemadas;
-  return { tmb, tdee, consumidas, quemadas, ejercicios, saldo: tdee - consumidas };
+  const actividad = tmb * (factorDeActividad(usuario) - 1);
+  const tdee = tmb + actividad + quemadas;
+  return { tmb, actividad, tdee, consumidas, quemadas, ejercicios, saldo: tdee - consumidas };
 }
 
 // ---------- Progreso acumulado de grasa ----------
@@ -144,12 +161,13 @@ function calcularHitos(historial) {
 }
 
 // Guarda el balance del día y actualiza los hitos. Se puede llamar las veces que haga falta.
-// Un día sin comidas no cuenta: sin saber qué comió, sería un déficit inventado.
+// Un día con pocas comidas no cuenta (y si ya contaba, sale): sería un déficit inventado.
 export async function cerrarDia(usuario, fecha) {
   const balance = await datosBalance(usuario, fecha);
   if (!balance) return;
 
-  if (balance.consumidas === 0) {
+  const cantidadDeComidas = (await comidasDelDia(usuario.chatId, fecha)).length;
+  if (cantidadDeComidas < MINIMO_COMIDAS_PARA_CONTAR) {
     await borrarBalanceDiario(usuario.chatId, fecha);
   } else {
     await guardarBalanceDiario(usuario.chatId, fecha, balance);
@@ -167,12 +185,12 @@ export async function actualizarSiCorresponde(usuario, fecha) {
 
 // Cierra los días que hayan quedado sin cerrar (por ejemplo, si el bot estuvo apagado).
 export async function cerrarDiasPendientes(usuario, hasta) {
-  for (const fecha of await diasPendientesDeCierre(usuario.chatId, hasta)) {
+  for (const fecha of await diasPendientesDeCierre(usuario.chatId, hasta, MINIMO_COMIDAS_PARA_CONTAR)) {
     await cerrarDia(usuario, fecha);
   }
 }
 
-// Recalcula todo el historial. Hace falta cuando cambian sexo, edad o altura, porque cambian la TMB.
+// Recalcula todo el historial. Hace falta cuando cambian sexo, edad, altura o actividad.
 export async function recalcularHistorial(usuario) {
   const hoy = hoyLocal();
   for (const fecha of await diasConComidas(usuario.chatId)) {
@@ -199,7 +217,7 @@ export async function textoProgresoGrasa(usuario) {
     '🎯 Progreso acumulado de grasa (estimado)',
     `${barra(haciaElProximo, KCAL_POR_KILO_DE_GRASA, '🟩')} ${enKcal(haciaElProximo)} / ${enKcal(KCAL_POR_KILO_DE_GRASA)} kcal (${porcentaje}%)`,
     `Faltan ${enKcal(faltan)} kcal para el próximo kilo`,
-    `Pérdida teórica: ~${kgTeoricos} kg en ${historial.length} ${historial.length === 1 ? 'día anotado' : 'días anotados'}`,
+    `Pérdida teórica: ~${kgTeoricos} kg en ${historial.length} ${historial.length === 1 ? 'día contado' : 'días contados'}`,
   ];
   if (acumulado < 0) lineas.push(`Por ahora el acumulado está en ${enKcal(acumulado)} kcal.`);
   if (hitos.length > 0) lineas.push(`🏅 Hitos logrados: ${hitos.map((hito) => `${hito.kg} kg`).join(', ')}`);
@@ -260,12 +278,12 @@ export async function balanceDelDia(usuario, fecha) {
   const balance = await datosBalance(usuario, fecha);
   if (!balance) return '🔥 Para ver si estás en déficit o superávit, tocá "🔥 Mi TMB" y calculamos tu metabolismo.';
 
-  const { tmb, tdee, consumidas, quemadas, ejercicios, saldo } = balance;
+  const { tmb, actividad, tdee, consumidas, quemadas, ejercicios, saldo } = balance;
   const detalle = ejercicios.length > 0 ? ` (${nombresDeEjercicios(ejercicios)})` : '';
   const lineas = [
     '⚖️ Balance del día (estimado)',
     `• TMB: ${enKcal(tmb)} kcal`,
-    `• Actividad diaria y digestión: +${enKcal(tmb * (FACTOR_ACTIVIDAD - 1))} kcal`,
+    `• Actividad diaria y digestión: +${enKcal(actividad)} kcal`,
     `• Ejercicio: +${enKcal(quemadas)} kcal${detalle}`,
     `• Gasto total: ${enKcal(tdee)} kcal`,
     `• Consumidas: ${enKcal(consumidas)} kcal`,
@@ -273,8 +291,11 @@ export async function balanceDelDia(usuario, fecha) {
     `Estado: ${textoEstado(saldo)}`,
   ];
 
+  const cantidadDeComidas = (await comidasDelDia(usuario.chatId, fecha)).length;
   const estado = estadoDelSaldo(saldo);
-  if (estado === 'déficit' && saldo > DEFICIT_MUY_GRANDE) {
+  if (cantidadDeComidas < MINIMO_COMIDAS_PARA_CONTAR) {
+    lineas.push(`Hoy anotaste ${cantidadDeComidas} comida, así que este día no suma a tu progreso: cuentan los días con ${MINIMO_COMIDAS_PARA_CONTAR} o más.`);
+  } else if (estado === 'déficit' && saldo > DEFICIT_MUY_GRANDE) {
     lineas.push('Es bastante: fijate si te quedó alguna comida sin anotar 😉');
   } else if (estado === 'superávit') {
     lineas.push('Un día así no cambia nada: lo que cuenta es cómo viene la semana 💪');
@@ -529,6 +550,22 @@ export async function contextoDelDia(usuario, fechaHora) {
 }
 
 // ---------- Resúmenes ----------
+
+// Los mensajes del resumen semanal para una persona: primero el suyo y después el de los demás,
+// para acompañarse entre todos. Quien no anotó nada en la semana no tiene resumen.
+// Lo usan el envío de los domingos y el botón "Resumen semanal".
+export async function resumenesSemanalesPara(chatIdDestino, fecha) {
+  const propios = [];
+  const deLosDemas = [];
+  for (const chatId of config.telegramChatIds) {
+    const usuario = await obtenerUsuario(chatId);
+    const texto = await resumenSemanal(usuario, fecha);
+    if (texto === null) continue;
+    if (chatId === chatIdDestino) propios.push(texto);
+    else deLosDemas.push(`👨‍👩‍👧 Así le fue a ${usuario.nombre ?? 'otro integrante'} esta semana\n\n${texto}`);
+  }
+  return [...propios, ...deLosDemas];
+}
 
 // Resumen del día: lo usan el botón "¿Cómo voy?" y el mensaje de cada noche.
 // El de la noche lo pide sin la línea de balance, porque ahí va el balance completo.
