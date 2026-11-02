@@ -110,7 +110,7 @@ async function enviarResumenDiario(bot, usuario) {
   console.log(`Notificación enviada: resumen diario a ${usuario.chatId}`);
 }
 
-export async function enviarResumenesSemanales(bot) {
+async function enviarResumenesSemanales(bot) {
   const hoy = hoyLocal();
   await paraCadaPersona('resumen semanal', async (destinatario) => {
     for (const texto of await resumenesSemanalesPara(destinatario.chatId, hoy)) {

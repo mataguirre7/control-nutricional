@@ -7,8 +7,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "probar-foto": "node src/probar-foto.js",
-    "importar-sqlite": "node src/importar-sqlite.js"
+    "probar-foto": "node src/probar-foto.js"
   },
   "engines": {
     "node": ">=24"

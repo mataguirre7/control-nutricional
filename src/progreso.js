@@ -38,7 +38,7 @@ const KCAL_POR_KILO_DE_GRASA = 7700;
 // Factor que multiplica a la TMB según la rutina diaria (incluye también la digestión).
 // Describe solo la rutina, SIN ejercicio: el ejercicio se anota y se suma aparte. Por eso son más
 // bajos que los factores habituales (1,375, 1,55...), que ya lo incluyen y lo contarían dos veces.
-export const NIVELES_DE_ACTIVIDAD = {
+const NIVELES_DE_ACTIVIDAD = {
   poca: { factor: 1.2, texto: 'poca actividad diaria' },
   media: { factor: 1.3, texto: 'actividad diaria media' },
   mucha: { factor: 1.4, texto: 'mucha actividad diaria' },
@@ -62,7 +62,7 @@ const DEFICIT_MUY_GRANDE = 1000;
 // ---------- Formato de números ----------
 
 // Redondea a un decimal para no mostrar restos como -0.4000000001.
-export function unDecimal(valor) {
+function unDecimal(valor) {
   return Math.round(valor * 10) / 10;
 }
 
@@ -108,7 +108,7 @@ export function textoMetas(usuario) {
 
 // Tasa metabólica basal con la fórmula de Mifflin-St Jeor: lo que el cuerpo gasta en reposo.
 // Devuelve null si falta algún dato. Usa el último peso, así se actualiza sola al pesarse.
-export function calcularTmb(usuario, kg, fecha) {
+function calcularTmb(usuario, kg, fecha) {
   if (!usuario.sexo || !usuario.anioNacimiento || !usuario.alturaCm || kg === null) return null;
   const edad = Number(fecha.slice(0, 4)) - usuario.anioNacimiento;
   const ajustePorSexo = usuario.sexo === 'hombre' ? 5 : -161;

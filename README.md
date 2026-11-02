@@ -323,7 +323,6 @@ src/
   reminders.js    # recordatorios inteligentes y resúmenes con node-cron
   api.js          # endpoints de Express
   probar-foto.js  # script para probar una foto desde la consola
-  importar-sqlite.js  # herramienta de una sola vez: pasa los datos de la base SQLite vieja a Postgres
 data/fotos/       # fotos de las comidas (no se sube a git)
 ```
 
@@ -383,24 +382,3 @@ En **DBeaver**: nueva conexión **PostgreSQL**, host = IP de Tailscale del serve
 
 > Las fechas (`fecha_hora`) están en hora argentina, sin zona horaria. Los nutrientes están en columnas JSON (`totales_json`, `nutrientes_json`); en SQL se leen así: `totales_json->>'kcal'`.
 
-### Migración desde SQLite (una sola vez)
-
-Las versiones anteriores guardaban todo en `data/nutricion.db` (SQLite). Para pasar esos datos a Postgres:
-
-1. **Con la versión vieja todavía instalada**, apagar el bot y exportar la base a un JSON:
-   ```bash
-   docker compose stop
-   docker compose run --rm -T --no-deps control-nutricional node - <<'EOF'
-   const { DatabaseSync } = require('node:sqlite');
-   const db = new DatabaseSync('data/nutricion.db', { readOnly: true });
-   const tablas = ['usuarios', 'comidas', 'comida_items', 'agua', 'peso'];
-   const datos = Object.fromEntries(tablas.map((t) => [t, db.prepare(`SELECT * FROM ${t}`).all()]));
-   require('fs').writeFileSync('data/exportacion-sqlite.json', JSON.stringify(datos, null, 1));
-   console.log('Exportado:', Object.entries(datos).map(([t, f]) => `${t} ${f.length}`).join(' · '));
-   EOF
-   ```
-2. Agregar `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` y `DB_HOST_PORT` al `.env`.
-3. Actualizar y levantar: `git pull && docker compose up -d --build`.
-4. Importar: `docker compose exec control-nutricional npm run importar-sqlite -- data/exportacion-sqlite.json`
-
-El importador conserva los ids originales y se puede correr más de una vez sin duplicar nada. Los registros sin `chat_id` (de cuando el bot era de una sola persona) no se pasan.

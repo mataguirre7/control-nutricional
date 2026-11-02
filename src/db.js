@@ -493,13 +493,3 @@ export async function comidasDelDia(chatId, fecha) {
   }
   return resultado;
 }
-
-// Para el script de importación: deja la próxima numeración de cada tabla después del último id.
-// Hace falta porque los datos importados traen sus ids originales.
-export async function ajustarNumeracion(cliente) {
-  for (const tabla of ['comidas', 'comida_items', 'agua', 'peso', 'ejercicios']) {
-    await cliente.query(`SELECT setval(pg_get_serial_sequence('${tabla}', 'id'), COALESCE((SELECT MAX(id) FROM ${tabla}), 0) + 1, false)`);
-  }
-}
-
-export { enTransaccion };
