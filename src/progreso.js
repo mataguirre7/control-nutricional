@@ -309,7 +309,11 @@ export async function balanceDelDia(usuario, fecha) {
 // barra(1150, 1600, '🟩') → "🟩🟩🟩🟩🟩🟩⬜⬜" (8 casilleros)
 function barra(actual, meta, simbolo) {
   const casilleros = 8;
-  const llenos = Math.min(casilleros, Math.round((actual / meta) * casilleros));
+  let llenos = Math.round((actual / meta) * casilleros);
+  // El redondeo no debe mentir: con algo de avance se pinta al menos uno,
+  // y la barra se llena recién al llegar a la meta.
+  if (actual > 0) llenos = Math.max(llenos, 1);
+  llenos = actual >= meta ? casilleros : Math.min(llenos, casilleros - 1);
   return simbolo.repeat(llenos) + '⬜'.repeat(casilleros - llenos);
 }
 
@@ -324,7 +328,7 @@ export function lineaKcal(kcal, usuario) {
 }
 
 export function lineaAgua(ml, usuario) {
-  return `Agua: ${barra(ml, usuario.metaAguaMl, '💧')} ${enLitros(ml)} / ${enLitros(usuario.metaAguaMl)} L`;
+  return `💧 Agua: ${barra(ml, usuario.metaAguaMl, '🟦')} ${enLitros(ml)} / ${enLitros(usuario.metaAguaMl)} L`;
 }
 
 // ---------- Rachas ----------
