@@ -2,8 +2,9 @@
 // Con ?chat_id=… devuelve una persona; sin él, devuelve a todas agrupadas.
 import express from 'express';
 import { config } from './config.js';
-import { obtenerUsuario, comidasDelDia, aguaDelDia, ultimoPesoDelDia, sumarDias } from './db.js';
+import { obtenerUsuario, comidasDelDia, aguaDelDia, ultimoPesoDelDia, ejerciciosDelDia, historialBalance, hitosDeGrasa, sumarDias } from './db.js';
 import { sumarNutrientes } from './nutrition.js';
+import { datosBalance } from './progreso.js';
 
 // Límite para que un pedido de rango no recorra años enteros por error.
 const MAXIMO_DIAS_RANGO = 366;
@@ -35,12 +36,22 @@ function diasEntre(desde, hasta) {
 // Arma el JSON completo de un día de una persona.
 async function armarDia(chatId, fecha) {
   const comidas = await comidasDelDia(chatId, fecha);
+  const balance = await datosBalance(await obtenerUsuario(chatId), fecha);
   return {
     fecha,
     comidas,
     agua_ml: await aguaDelDia(chatId, fecha),
     peso: await ultimoPesoDelDia(chatId, fecha),
+    ejercicios: await ejerciciosDelDia(chatId, fecha),
     totales_dia: sumarNutrientes(comidas.map((comida) => comida.totales)),
+    // null si la persona todavía no completó sus datos. saldo positivo = déficit, negativo = superávit.
+    balance: balance && {
+      tmb_kcal: balance.tmb,
+      tdee_kcal: balance.tdee,
+      consumidas_kcal: balance.consumidas,
+      quemadas_kcal: balance.quemadas,
+      saldo_kcal: balance.saldo,
+    },
   };
 }
 
@@ -87,6 +98,25 @@ export function iniciarApi() {
       });
     }
     res.json(usuarios);
+  });
+
+  // Progreso acumulado de grasa (estimado), con el historial de días cerrados y los hitos.
+  app.get('/api/progreso', async (req, res) => {
+    const chatIds = personasPedidas(req, res);
+    if (!chatIds) return;
+
+    const personas = [];
+    for (const chatId of chatIds) {
+      const historial = await historialBalance(chatId);
+      const acumulado = historial.reduce((suma, dia) => suma + dia.saldo_kcal, 0);
+      personas.push({
+        ...(await datosDePersona(chatId)),
+        acumulado_kcal: acumulado,
+        hitos: await hitosDeGrasa(chatId),
+        historial,
+      });
+    }
+    res.json(req.query.chat_id !== undefined ? personas[0] : { usuarios: personas });
   });
 
   app.get('/api/dia/:fecha', async (req, res) => {

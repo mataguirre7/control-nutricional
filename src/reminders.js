@@ -2,9 +2,19 @@
 // Los horarios son los mismos para todos, pero cada persona recibe lo suyo.
 import cron from 'node-cron';
 import { config, ZONA_HORARIA } from './config.js';
-import { hoyLocal, ahoraLocal, obtenerUsuario, aguaDelDia, hayComidaDelTipo, ultimoPesoDelDia, comidasDelDia } from './db.js';
+import { hoyLocal, ahoraLocal, sumarDias, obtenerUsuario, aguaDelDia, hayComidaDelTipo, ultimoPesoDelDia, comidasDelDia, marcarHitosAvisados } from './db.js';
 import { tecladoAgua, tecladoPrincipal } from './bot.js';
-import { lineaAgua, contextoDelDia, resumenDelDia, resumenSemanal } from './progreso.js';
+import {
+  lineaAgua,
+  contextoDelDia,
+  resumenDelDia,
+  resumenSemanal,
+  balanceDelDia,
+  cerrarDia,
+  cerrarDiasPendientes,
+  textoProgresoGrasa,
+  textoHitosNuevos,
+} from './progreso.js';
 import { escribirConsejoParaManana } from './vision.js';
 
 const MENSAJES = {
@@ -65,11 +75,24 @@ async function enviarRecordatorio(bot, usuario, tipo) {
     // Mandar los botones fijos con cada recordatorio asegura que siempre los tenga a mano.
     await bot.api.sendMessage(usuario.chatId, MENSAJES[tipo], { reply_markup: tecladoPrincipal });
   }
+  console.log(`Notificación enviada: recordatorio de ${tipo} a ${usuario.chatId}`);
 }
 
 async function enviarResumenDiario(bot, usuario) {
   const hoy = hoyLocal();
-  let texto = `🌙 Así fue tu día\n\n${await resumenDelDia(usuario, hoy)}`;
+  // Primero se cierra el día. Si después anota algo más, el día se recalcula solo.
+  await cerrarDia(usuario, hoy);
+
+  let texto = `🌙 Así fue tu día\n\n${await resumenDelDia(usuario, hoy, { conBalance: false })}`;
+
+  const balance = await balanceDelDia(usuario, hoy);
+  if (balance) texto += `\n\n${balance}`;
+
+  const progreso = await textoProgresoGrasa(usuario);
+  if (progreso) texto += `\n\n${progreso}`;
+
+  const hitosNuevos = await textoHitosNuevos(usuario);
+  if (hitosNuevos) texto += `\n\n${hitosNuevos}`;
 
   // El consejo para mañana es un extra: si Claude falla, el resumen sale igual.
   if ((await comidasDelDia(usuario.chatId, hoy)).length > 0) {
@@ -82,11 +105,14 @@ async function enviarResumenDiario(bot, usuario) {
     texto += '\n\n¡Mañana arrancamos de nuevo! 💪';
   }
   await bot.api.sendMessage(usuario.chatId, texto, { reply_markup: tecladoPrincipal });
+  // Se marca después de enviar: si el mensaje falla, el hito se avisa la noche siguiente.
+  await marcarHitosAvisados(usuario.chatId);
+  console.log(`Notificación enviada: resumen diario a ${usuario.chatId}`);
 }
 
 // Cada persona recibe primero su resumen y después el de los demás, para acompañarse entre todos.
 // Quien no anotó nada en la semana no tiene resumen (ni propio ni como copia).
-async function enviarResumenesSemanales(bot) {
+export async function enviarResumenesSemanales(bot) {
   const hoy = hoyLocal();
   const resumenes = [];
   for (const chatId of config.telegramChatIds) {
@@ -104,7 +130,13 @@ async function enviarResumenesSemanales(bot) {
       if (usuario.chatId === destinatario.chatId) continue;
       await bot.api.sendMessage(destinatario.chatId, `👨‍👩‍👧 Así le fue a ${usuario.nombre ?? 'otro integrante'} esta semana\n\n${texto}`);
     }
+    console.log(`Notificación enviada: resumen semanal a ${destinatario.chatId}`);
   });
+}
+
+// Cierra los días anteriores que hayan quedado sin cerrar (por ejemplo, si el bot estuvo apagado).
+function cerrarDiasAnteriores() {
+  return paraCadaPersona('cierre de días', (usuario) => cerrarDiasPendientes(usuario, sumarDias(hoyLocal(), -1)));
 }
 
 export function iniciarRecordatorios(bot) {
@@ -120,6 +152,10 @@ export function iniciarRecordatorios(bot) {
     // Si falla el armado de los resúmenes, se loguea y el resto del bot sigue andando.
     programar(hora, () => enviarResumenesSemanales(bot).catch((error) => console.error('Falló el resumen semanal:', error)), '0');
   }
+
+  // Cinco minutos después de medianoche, y también ahora al arrancar.
+  programar('00:05', cerrarDiasAnteriores);
+  cerrarDiasAnteriores();
 
   console.log('Recordatorios programados:', config.recordatorios);
   console.log(`Resumen diario: ${config.resumenDiario.join(', ')} · Resumen semanal (domingos): ${config.resumenSemanal.join(', ')}`);

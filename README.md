@@ -150,6 +150,8 @@ No hace falta saber comandos. Abajo del chat quedan siempre 4 botones grandes, y
 | Toca **🎯 Mis metas**, o escribe "quiero llegar a 85 kilos" | Muestra o cambia sus metas |
 | Toca **❓ Ayuda** | Le recuerda todo lo que puede mandar |
 | Pregunta algo ("¿qué puedo cenar?") | Claude le responde usando lo que ya comió y sus metas |
+| Toca **🔥 Mi TMB** o escribe "quiero calcular mi TMB" | Pregunta lo que falte (sexo, edad, altura, peso) y muestra su metabolismo basal. Si da todos los datos en un mensaje, no pregunta nada |
+| Toca **🏃 Hice ejercicio** o escribe "caminé 40 minutos" | Lo anota con una estimación de las calorías gastadas de más, y lo puede borrar |
 | Cuenta varias cosas juntas ("peso 98, quiero llegar a 75, tomé 3 vasos y almorcé empanadas") | Anota todo: primero las metas y después el peso, el agua y la comida |
 
 El tipo de comida (desayuno, almuerzo, merienda o cena) se deduce por la hora. Los rangos están en `RANGOS_COMIDAS`, dentro de [src/config.js](src/config.js).
@@ -157,11 +159,40 @@ El tipo de comida (desayuno, almuerzo, merienda o cena) se deduce por la hora. L
 ### Lo que el bot hace solo
 
 - **Recordatorios que no molestan:** si ya anotó el almuerzo, no le recuerda el almuerzo; si ya cumplió el agua, se cortan los de agua; si ya se pesó, no le recuerda el peso.
-- **Resumen de cada noche** (`RESUMEN_DIARIO`): comidas, calorías, agua, racha y una sugerencia de Claude para mañana.
+- **Resumen de cada noche** (`RESUMEN_DIARIO`): comidas, calorías, agua, racha, balance del día, progreso de grasa y una sugerencia de Claude para mañana.
 - **Resumen semanal** (domingos, `RESUMEN_SEMANAL`): días anotados, promedio de calorías, días con el agua cumplida, tendencia de peso y racha. Cada persona recibe el suyo y una copia del de los demás ("Así le fue a Marta esta semana"), para acompañarse entre todos. Quien no anotó nada en la semana no tiene resumen.
 
 Los horarios son los mismos para todos, pero cada persona recibe lo suyo, con sus propios datos y metas.
 - **Logros:** rachas de 3, 7, 14, 21, 30… días anotando o cumpliendo el agua; el primer kilo, cada 5 kg y el 5% y 10% del peso inicial.
+
+### Cómo se calcula el balance
+
+Todo son estimaciones, y el bot lo aclara.
+
+- **TMB** (Mifflin-St Jeor): `10 × kg + 6,25 × cm − 5 × edad`, más 5 en hombres o menos 161 en mujeres. Usa el peso que tenía la persona ese día.
+- **Gasto total (TDEE)**: `TMB × 1,2 + ejercicio`. El 1,2 corresponde a una vida mayormente sedentaria e incluye la actividad cotidiana y la digestión. El ejercicio cuenta solo lo gastado de más: `(MET − 1) × kg × horas`.
+- **Saldo del día**: `TDEE − consumidas`. Positivo es déficit; negativo, superávit.
+
+**Progreso de grasa:** la referencia es 7.700 kcal de déficit neto = 1 kg de grasa teórica.
+
+- El día se cierra con el resumen de la noche y queda en `balance_diario`, con una fila por persona y día, así que no se puede contar dos veces.
+- Los días sin comidas anotadas no cuentan. Los que quedaron sin cerrar (por ejemplo, con el bot apagado) se cierran al arrancar y a las 00:05.
+- El acumulado es la suma de esa tabla. Si se cambia un registro anterior, se recalcula ese día; si se cambian sexo, edad o altura, todo el historial.
+- Los hitos (`hitos_grasa`) se recalculan desde el historial: un superávit posterior no borra un hito logrado, pero corregir un dato equivocado sí puede sacarlo.
+
+### Controlar las notificaciones
+
+Cada envío queda en los logs:
+
+```bash
+docker compose logs control-nutricional | grep -E "Notificación enviada|salteado|Falló"
+```
+
+- `Notificación enviada`: Telegram aceptó el mensaje.
+- `salteado`: no hacía falta, porque la persona ya lo había hecho hoy.
+- `Falló`: no se entregó y no se reintenta (por ejemplo, si la persona bloqueó el bot).
+
+Si el bot está apagado justo a esa hora, ese recordatorio se pierde. A quien nunca le escribió al bot no se le manda nada, porque Telegram no lo permite.
 
 ### Costo
 
@@ -238,6 +269,16 @@ Sin `chat_id` (`/api/dia/2026-10-16`):
 { "fecha": "2026-10-16", "usuarios": [ { "chat_id": "111111111", "nombre": "Marta", "...": "mismo formato de arriba" } ] }
 ```
 
+`/api/dia` también devuelve `ejercicios` y `balance` (`null` si faltan datos para la TMB). `saldo_kcal` positivo es déficit.
+
+### Progreso de grasa
+
+```bash
+curl -H "x-api-key: TU_API_KEY" "http://localhost:3000/api/progreso?chat_id=111111111"
+```
+
+Devuelve `acumulado_kcal`, `hitos` e `historial` (una fila por día cerrado). Sin `chat_id` los devuelve agrupados en `usuarios`.
+
 ### Un rango de días
 
 ```bash
@@ -285,7 +326,7 @@ src/
 data/fotos/       # fotos de las comidas (no se sube a git)
 ```
 
-La base de datos es **Postgres** y corre en su propio contenedor (`db`), con los datos en el volumen de Docker `db_data`. Tiene 5 tablas: `usuarios`, `comidas`, `comida_items`, `agua` y `peso`. Cada registro guarda el `chat_id` de la persona.
+La base de datos es **Postgres** y corre en su propio contenedor (`db`), con los datos en el volumen de Docker `db_data`. Tiene 8 tablas: `usuarios`, `comidas`, `comida_items`, `agua`, `peso`, `ejercicios`, `balance_diario` e `hitos_grasa`. Cada registro guarda el `chat_id` de la persona (salvo `comida_items`, que cuelga de su comida). Las tablas y columnas nuevas se crean solas al arrancar, sin tocar los datos existentes.
 
 Así se procesa una foto de comida:
 

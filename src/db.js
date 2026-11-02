@@ -18,6 +18,12 @@ pg.types.setTypeParser(1082, (texto) => texto);
 
 const pool = new pg.Pool(config.db);
 
+// Si Postgres se reinicia, las conexiones inactivas dan error. Sin este aviso, ese error
+// tumbaría todo el programa. El pool abre conexiones nuevas solo.
+pool.on('error', (error) => {
+  console.error('Se cortó una conexión con la base de datos:', error.message);
+});
+
 // Atajo: corre una consulta y devuelve las filas.
 async function filas(sql, parametros = []) {
   const resultado = await pool.query(sql, parametros);
@@ -90,6 +96,44 @@ export async function prepararBase() {
       fecha_hora TIMESTAMP NOT NULL,
       kg         DOUBLE PRECISION NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS ejercicios (
+      id          SERIAL PRIMARY KEY,
+      chat_id     TEXT NOT NULL,
+      fecha_hora  TIMESTAMP NOT NULL,
+      descripcion TEXT NOT NULL,
+      minutos     INTEGER,
+      kcal        DOUBLE PRECISION NOT NULL
+    );
+
+    -- Historial del balance: una fila por persona y día, así un día no se puede contar dos veces.
+    -- saldo_kcal positivo = déficit, negativo = superávit. El acumulado es la suma de esta tabla.
+    CREATE TABLE IF NOT EXISTS balance_diario (
+      chat_id         TEXT NOT NULL,
+      fecha           DATE NOT NULL,
+      tmb_kcal        DOUBLE PRECISION NOT NULL,
+      tdee_kcal       DOUBLE PRECISION NOT NULL,
+      quemadas_kcal   DOUBLE PRECISION NOT NULL,
+      consumidas_kcal DOUBLE PRECISION NOT NULL,
+      saldo_kcal      DOUBLE PRECISION NOT NULL,
+      PRIMARY KEY (chat_id, fecha)
+    );
+
+    -- Cada kilo de grasa teórica alcanzado. avisado = ya se le contó a la persona.
+    CREATE TABLE IF NOT EXISTS hitos_grasa (
+      chat_id TEXT NOT NULL,
+      kg      INTEGER NOT NULL,
+      fecha   DATE NOT NULL,
+      avisado BOOLEAN NOT NULL DEFAULT FALSE,
+      PRIMARY KEY (chat_id, kg)
+    );
+
+    -- Datos para calcular la TMB. Van con ALTER para sumarse también a las bases que ya existen.
+    -- pregunta_pendiente guarda qué le preguntó el bot, así la charla sobrevive a un reinicio.
+    ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sexo TEXT;
+    ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS anio_nacimiento INTEGER;
+    ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS altura_cm DOUBLE PRECISION;
+    ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS pregunta_pendiente TEXT;
   `);
 }
 
@@ -140,16 +184,20 @@ export async function obtenerUsuario(chatId) {
     pesoObjetivo: usuario?.peso_objetivo ?? null,
     metaKcal: usuario?.meta_kcal ?? null,
     metaAguaMl: usuario?.meta_agua_ml ?? META_AGUA_POR_DEFECTO,
+    sexo: usuario?.sexo ?? null,
+    anioNacimiento: usuario?.anio_nacimiento ?? null,
+    alturaCm: usuario?.altura_cm ?? null,
+    preguntaPendiente: usuario?.pregunta_pendiente ?? null,
   };
 }
 
-const COLUMNAS_DE_METAS = ['peso_objetivo', 'meta_kcal', 'meta_agua_ml'];
+const COLUMNAS_DE_USUARIO = ['peso_objetivo', 'meta_kcal', 'meta_agua_ml', 'sexo', 'anio_nacimiento', 'altura_cm', 'pregunta_pendiente'];
 
-// Guarda una meta de la persona. valor null borra la meta.
-export async function guardarMeta(chatId, columna, valor) {
+// Guarda un dato de la persona (una meta, su altura...). valor null lo borra.
+export async function guardarDatoDeUsuario(chatId, columna, valor) {
   // El nombre de una columna no puede ir como parámetro "$1", así que lo validamos contra una lista fija.
-  if (!COLUMNAS_DE_METAS.includes(columna)) {
-    throw new Error(`Meta desconocida: ${columna}`);
+  if (!COLUMNAS_DE_USUARIO.includes(columna)) {
+    throw new Error(`Dato de usuario desconocido: ${columna}`);
   }
   await pool.query(
     `INSERT INTO usuarios (chat_id, ${columna}) VALUES ($1, $2)
@@ -201,6 +249,16 @@ export async function ultimoPeso(chatId) {
   return resultado?.kg ?? null;
 }
 
+// El peso que tenía ese día: el último anotado hasta esa fecha o, si todavía no se había
+// pesado, el primero que anotó. Así el historial no cambia cuando anota un peso nuevo.
+export async function pesoParaFecha(chatId, fecha) {
+  const anterior = await fila(
+    'SELECT kg FROM peso WHERE chat_id = $1 AND fecha_hora::date <= $2 ORDER BY fecha_hora DESC, id DESC LIMIT 1',
+    [chatId, fecha]
+  );
+  return anterior?.kg ?? primerPeso(chatId);
+}
+
 // El peso más bajo registrado hasta ahora, o null. Sirve para no repetir logros de peso.
 export async function pesoMinimo(chatId) {
   const resultado = await fila('SELECT MIN(kg) AS kg FROM peso WHERE chat_id = $1', [chatId]);
@@ -223,6 +281,93 @@ export async function ultimoPesoDelDia(chatId, fecha) {
      ORDER BY fecha_hora DESC, id DESC LIMIT 1`,
     [chatId, fecha]
   );
+}
+
+// ---------- Ejercicio ----------
+
+// Devuelve el id del ejercicio nuevo (lo usa el botón de borrar).
+export async function guardarEjercicio({ chatId, fechaHora, descripcion, minutos, kcal }) {
+  const ejercicio = await fila(
+    `INSERT INTO ejercicios (chat_id, fecha_hora, descripcion, minutos, kcal)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [chatId, fechaHora, descripcion, minutos, kcal]
+  );
+  return ejercicio.id;
+}
+
+export async function ejerciciosDelDia(chatId, fecha) {
+  return filas(
+    'SELECT id, fecha_hora, descripcion, minutos, kcal FROM ejercicios WHERE chat_id = $1 AND fecha_hora::date = $2 ORDER BY fecha_hora, id',
+    [chatId, fecha]
+  );
+}
+
+// Filtrar por chat_id evita que alguien borre el ejercicio de otra persona.
+// Devuelve la fecha del ejercicio borrado, o null si no existía.
+export async function borrarEjercicio(chatId, id) {
+  const borrado = await fila('DELETE FROM ejercicios WHERE id = $1 AND chat_id = $2 RETURNING fecha_hora', [id, chatId]);
+  return borrado ? borrado.fecha_hora.slice(0, 10) : null;
+}
+
+// ---------- Balance diario e hitos ----------
+
+// Crea o reemplaza la fila del día: volver a cerrar un día nunca lo cuenta dos veces.
+export async function guardarBalanceDiario(chatId, fecha, { tmb, tdee, quemadas, consumidas, saldo }) {
+  await pool.query(
+    `INSERT INTO balance_diario (chat_id, fecha, tmb_kcal, tdee_kcal, quemadas_kcal, consumidas_kcal, saldo_kcal)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (chat_id, fecha) DO UPDATE SET
+       tmb_kcal = EXCLUDED.tmb_kcal, tdee_kcal = EXCLUDED.tdee_kcal, quemadas_kcal = EXCLUDED.quemadas_kcal,
+       consumidas_kcal = EXCLUDED.consumidas_kcal, saldo_kcal = EXCLUDED.saldo_kcal`,
+    [chatId, fecha, tmb, tdee, quemadas, consumidas, saldo]
+  );
+}
+
+export async function borrarBalanceDiario(chatId, fecha) {
+  await pool.query('DELETE FROM balance_diario WHERE chat_id = $1 AND fecha = $2', [chatId, fecha]);
+}
+
+export async function diaCerrado(chatId, fecha) {
+  return (await fila('SELECT 1 FROM balance_diario WHERE chat_id = $1 AND fecha = $2', [chatId, fecha])) !== null;
+}
+
+export async function historialBalance(chatId) {
+  return filas('SELECT * FROM balance_diario WHERE chat_id = $1 ORDER BY fecha', [chatId]);
+}
+
+// Días con comidas anotadas hasta "hasta" que todavía no se cerraron.
+export async function diasPendientesDeCierre(chatId, hasta) {
+  const dias = await filas(
+    `SELECT DISTINCT c.fecha_hora::date AS fecha FROM comidas c
+     WHERE c.chat_id = $1 AND c.fecha_hora::date <= $2
+       AND NOT EXISTS (SELECT 1 FROM balance_diario b WHERE b.chat_id = c.chat_id AND b.fecha = c.fecha_hora::date)
+     ORDER BY fecha`,
+    [chatId, hasta]
+  );
+  return dias.map((dia) => dia.fecha);
+}
+
+// Deja guardados exactamente estos hitos: agrega los nuevos, corrige fechas y saca los que ya no
+// corresponden (por ejemplo, si se corrigió una comida). Los ya avisados no se vuelven a avisar.
+export async function sincronizarHitos(chatId, hitos) {
+  await enTransaccion(async (cliente) => {
+    await cliente.query('DELETE FROM hitos_grasa WHERE chat_id = $1 AND kg > $2', [chatId, hitos.length]);
+    for (const hito of hitos) {
+      await cliente.query(
+        `INSERT INTO hitos_grasa (chat_id, kg, fecha) VALUES ($1, $2, $3)
+         ON CONFLICT (chat_id, kg) DO UPDATE SET fecha = EXCLUDED.fecha`,
+        [chatId, hito.kg, hito.fecha]
+      );
+    }
+  });
+}
+
+export async function hitosDeGrasa(chatId) {
+  return filas('SELECT kg, fecha, avisado FROM hitos_grasa WHERE chat_id = $1 ORDER BY kg', [chatId]);
+}
+
+export async function marcarHitosAvisados(chatId) {
+  await pool.query('UPDATE hitos_grasa SET avisado = TRUE WHERE chat_id = $1', [chatId]);
 }
 
 // ---------- Comidas ----------
@@ -348,7 +493,7 @@ export async function comidasDelDia(chatId, fecha) {
 // Para el script de importación: deja la próxima numeración de cada tabla después del último id.
 // Hace falta porque los datos importados traen sus ids originales.
 export async function ajustarNumeracion(cliente) {
-  for (const tabla of ['comidas', 'comida_items', 'agua', 'peso']) {
+  for (const tabla of ['comidas', 'comida_items', 'agua', 'peso', 'ejercicios']) {
     await cliente.query(`SELECT setval(pg_get_serial_sequence('${tabla}', 'id'), COALESCE((SELECT MAX(id) FROM ${tabla}), 0) + 1, false)`);
   }
 }

@@ -41,6 +41,7 @@ bot.api
     { command: 'hoy', description: 'Ver cómo vas hoy 📊' },
     { command: 'agua', description: 'Sumar un vaso de agua 💧' },
     { command: 'metas', description: 'Ver tus metas 🎯' },
+    { command: 'tmb', description: 'Calcular o ver tu TMB 🔥' },
     { command: 'start', description: 'Ver qué le podés mandar al bot' },
   ])
   .catch((error) => console.error('No pude configurar el menú de comandos:', error.message));

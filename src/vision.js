@@ -14,7 +14,7 @@ const INSTRUCCIONES_ANALISIS = `${PERSONALIDAD}
 
 Vas a recibir el contexto de su día y un mensaje suyo: una foto (a veces con un texto) o solo un texto.
 
-Un mismo mensaje puede traer varias cosas a la vez. Completá TODOS los campos que correspondan y dejá vacíos los demás: textos en "", números en null e "items" en [].
+Un mismo mensaje puede traer varias cosas a la vez. Completá TODOS los campos que correspondan y dejá vacíos los demás: textos en "", números y datos en null, listas en [] y "calcular_tmb" en false.
 
 Ejemplo: "Peso 105 kilos, quiero llegar a 85, comer 1600 calorías por día y tomar 2 litros de agua. Hoy ya tomé 2 vasos y almorcé una milanesa con ensalada." → "kg": 105; "metas": peso 85, kcal 1600, agua 2000; "agua_ml": ${config.vasoMl * 2}; "items": la milanesa y la ensalada.
 
@@ -23,6 +23,15 @@ Ejemplo: "Peso 105 kilos, quiero llegar a 85, comer 1600 calorías por día y to
 "agua_ml" es el agua que YA tomó, en mililitros (no la que quiere tomar). Un vaso son ${config.vasoMl} ml, una botellita 500 ml y un litro 1000 ml. Si cuenta que tomó agua sin decir cuánto, es un vaso.
 
 "metas" es lo que quiere lograr: "peso" en kilos, "kcal" en calorías por día y "agua" en mililitros por día (2 litros = 2000). Si pide sacar o borrar una meta, poné esa meta en 0.
+
+"ejercicios" es el ejercicio que YA hizo (no el que piensa hacer). Para cada uno:
+- "descripcion": corta y en español (ej: "Caminata", "Gym tranqui").
+- "minutos": lo que duró. Si no lo dice, asumí 30.
+- "kcal": solo lo que gastó DE MÁS por hacer ese ejercicio, sin contar lo que igual gastaría en reposo (eso ya está en su metabolismo basal). Calculalo con (MET - 1) × kilos × horas, con su último peso del contexto o 75 kg si no figura. Elegí un MET conservador: es mejor quedarse corto que hacerle creer que quemó de más.
+
+"datos" son sus datos personales si los menciona: "sexo" ("mujer" u "hombre"), "edad" en años y "altura_cm" en centímetros (1,65 m = 165).
+
+"calcular_tmb" va en true si quiere calcular o saber su TMB o su metabolismo basal, o si da datos personales para eso. En ese caso no le pidas datos en "respuesta": el bot le hace las preguntas que falten.
 
 "items" es lo que YA comió o está comiendo, o lo que se ve en una foto de comida o bebida. No incluyas lo que piensa comer, lo que suele comer en general ni lo que pregunta si puede comer.
 
@@ -59,6 +68,30 @@ const ESQUEMA_ANALISIS = {
       required: ['peso', 'kcal', 'agua'],
       additionalProperties: false,
     },
+    datos: {
+      type: 'object',
+      properties: {
+        sexo: { anyOf: [{ type: 'string', enum: ['mujer', 'hombre'] }, { type: 'null' }] },
+        edad: NUMERO_O_NULL,
+        altura_cm: NUMERO_O_NULL,
+      },
+      required: ['sexo', 'edad', 'altura_cm'],
+      additionalProperties: false,
+    },
+    calcular_tmb: { type: 'boolean' },
+    ejercicios: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          descripcion: { type: 'string' },
+          minutos: { type: 'number' },
+          kcal: { type: 'number' },
+        },
+        required: ['descripcion', 'minutos', 'kcal'],
+        additionalProperties: false,
+      },
+    },
     items: {
       type: 'array',
       items: {
@@ -80,7 +113,7 @@ const ESQUEMA_ANALISIS = {
       },
     },
   },
-  required: ['descripcion', 'consejo', 'respuesta', 'kg', 'agua_ml', 'metas', 'items'],
+  required: ['descripcion', 'consejo', 'respuesta', 'kg', 'agua_ml', 'metas', 'datos', 'calcular_tmb', 'ejercicios', 'items'],
   additionalProperties: false,
 };
 
@@ -112,7 +145,7 @@ async function analizar(contenido) {
 
 // imagen: Buffer con la foto. tipoMime: "image/jpeg", "image/png", etc.
 // textoAdjunto: el texto que mandó con la foto (puede ser vacío).
-// Devuelve { descripcion, consejo, respuesta, kg, agua_ml, metas, items }.
+// Devuelve { descripcion, consejo, respuesta, kg, agua_ml, metas, datos, calcular_tmb, ejercicios, items }.
 export function analizarFoto(imagen, tipoMime, contextoDelDia, textoAdjunto = '') {
   return analizar([
     { type: 'image', source: { type: 'base64', media_type: tipoMime, data: imagen.toString('base64') } },

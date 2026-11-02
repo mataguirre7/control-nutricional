@@ -15,10 +15,33 @@ import {
   ultimoPesoDelDia,
   primerPeso,
   promedioPeso,
+  ejerciciosDelDia,
+  hoyLocal,
+  pesoParaFecha,
+  guardarBalanceDiario,
+  borrarBalanceDiario,
+  diaCerrado,
+  historialBalance,
+  diasPendientesDeCierre,
+  sincronizarHitos,
+  hitosDeGrasa,
 } from './db.js';
 
 // Rachas que merecen un festejo especial.
 const HITOS_RACHA = [3, 7, 14, 21, 30, 60, 90, 180, 365];
+
+// Referencia aproximada: 7.700 kcal de déficit neto equivalen a 1 kg de grasa corporal.
+const KCAL_POR_KILO_DE_GRASA = 7700;
+
+// Factor de un estilo de vida mayormente sedentario: TMB × 1,2 ya incluye la actividad
+// cotidiana y la digestión. El ejercicio anotado se suma aparte, y solo lo que se gastó de más.
+const FACTOR_ACTIVIDAD = 1.2;
+
+// Por debajo de esta diferencia (en kcal) el día se considera en equilibrio: la estimación no da para más.
+const MARGEN_EQUILIBRIO = 100;
+
+// Un déficit mayor a este suele ser una comida sin anotar. Se lo marcamos en vez de festejarlo.
+const DEFICIT_MUY_GRANDE = 1000;
 
 // ---------- Formato de números ----------
 
@@ -63,6 +86,201 @@ export function textoMetas(usuario) {
     '"quiero comer 1600 calorías por día"',
     '"quiero tomar 2 litros de agua por día"',
   ].join('\n');
+}
+
+// ---------- TMB y balance del día ----------
+
+// Tasa metabólica basal con la fórmula de Mifflin-St Jeor: lo que el cuerpo gasta en reposo.
+// Devuelve null si falta algún dato. Usa el último peso, así se actualiza sola al pesarse.
+export function calcularTmb(usuario, kg, fecha) {
+  if (!usuario.sexo || !usuario.anioNacimiento || !usuario.alturaCm || kg === null) return null;
+  const edad = Number(fecha.slice(0, 4)) - usuario.anioNacimiento;
+  const ajustePorSexo = usuario.sexo === 'hombre' ? 5 : -161;
+  return Math.round(10 * kg + 6.25 * usuario.alturaCm - 5 * edad + ajustePorSexo);
+}
+
+// El resultado que se muestra al terminar las preguntas o al tocar "Mi TMB".
+export function textoTmb(usuario, kg, fecha) {
+  const edad = Number(fecha.slice(0, 4)) - usuario.anioNacimiento;
+  const altura = (usuario.alturaCm / 100).toLocaleString('es-AR', { maximumFractionDigits: 2 });
+  return [
+    `🔥 Tu TMB es de ~${enKcal(calcularTmb(usuario, kg, fecha))} kcal por día`,
+    '',
+    'Es lo que tu cuerpo gasta en reposo. Se actualiza sola cada vez que anotás tu peso.',
+    `Sumando la actividad de todos los días y la digestión, gastás unas ${enKcal(calcularTmb(usuario, kg, fecha) * FACTOR_ACTIVIDAD)} kcal por día, sin contar el ejercicio (es una estimación).`,
+    '',
+    `Datos: ${usuario.sexo}, ${edad} años, ${altura} m, ${enKg(kg)} kg`,
+  ].join('\n');
+}
+
+// Junta los números del balance. Devuelve null si todavía no se puede calcular la TMB.
+// tdee = gasto total estimado. saldo positivo = déficit (gastó más de lo que comió); negativo = superávit.
+// "quemadas" ya está dentro del tdee: no se vuelve a sumar en ningún otro lado.
+export async function datosBalance(usuario, fecha) {
+  const tmb = calcularTmb(usuario, await pesoParaFecha(usuario.chatId, fecha), fecha);
+  if (tmb === null) return null;
+
+  const ejercicios = await ejerciciosDelDia(usuario.chatId, fecha);
+  const consumidas = await kcalDelDia(usuario.chatId, fecha);
+  const quemadas = ejercicios.reduce((suma, ejercicio) => suma + ejercicio.kcal, 0);
+  const tdee = tmb * FACTOR_ACTIVIDAD + quemadas;
+  return { tmb, tdee, consumidas, quemadas, ejercicios, saldo: tdee - consumidas };
+}
+
+// ---------- Progreso acumulado de grasa ----------
+
+// Recorre el historial en orden y anota el primer día en que el acumulado llegó a cada kilo.
+// Si después hubo superávits, el hito logrado se conserva.
+function calcularHitos(historial) {
+  const hitos = [];
+  let acumulado = 0;
+  for (const dia of historial) {
+    acumulado += dia.saldo_kcal;
+    while (acumulado >= (hitos.length + 1) * KCAL_POR_KILO_DE_GRASA) {
+      hitos.push({ kg: hitos.length + 1, fecha: dia.fecha });
+    }
+  }
+  return hitos;
+}
+
+// Guarda el balance del día y actualiza los hitos. Se puede llamar las veces que haga falta.
+// Un día sin comidas no cuenta: sin saber qué comió, sería un déficit inventado.
+export async function cerrarDia(usuario, fecha) {
+  const balance = await datosBalance(usuario, fecha);
+  if (!balance) return;
+
+  if (balance.consumidas === 0) {
+    await borrarBalanceDiario(usuario.chatId, fecha);
+  } else {
+    await guardarBalanceDiario(usuario.chatId, fecha, balance);
+  }
+  await sincronizarHitos(usuario.chatId, calcularHitos(await historialBalance(usuario.chatId)));
+}
+
+// Se llama después de cambiar una comida, un ejercicio o un peso. Un día anterior o uno ya
+// cerrado se recalcula; el día de hoy, si sigue abierto, se cierra recién a la noche.
+export async function actualizarSiCorresponde(usuario, fecha) {
+  if (fecha < hoyLocal() || (await diaCerrado(usuario.chatId, fecha))) {
+    await cerrarDia(usuario, fecha);
+  }
+}
+
+// Cierra los días que hayan quedado sin cerrar (por ejemplo, si el bot estuvo apagado).
+export async function cerrarDiasPendientes(usuario, hasta) {
+  for (const fecha of await diasPendientesDeCierre(usuario.chatId, hasta)) {
+    await cerrarDia(usuario, fecha);
+  }
+}
+
+// Recalcula todo el historial. Hace falta cuando cambian sexo, edad o altura, porque cambian la TMB.
+export async function recalcularHistorial(usuario) {
+  const hoy = hoyLocal();
+  for (const fecha of await diasConComidas(usuario.chatId)) {
+    await actualizarSiCorresponde(usuario, fecha);
+  }
+  await cerrarDiasPendientes(usuario, sumarDias(hoy, -1));
+}
+
+// Barra hacia el próximo kilo, con lo que falta y la pérdida teórica. Devuelve null si
+// todavía no hay ningún día cerrado.
+export async function textoProgresoGrasa(usuario) {
+  const historial = await historialBalance(usuario.chatId);
+  if (historial.length === 0) return null;
+
+  const acumulado = historial.reduce((suma, dia) => suma + dia.saldo_kcal, 0);
+  const hitos = await hitosDeGrasa(usuario.chatId);
+  // Con el acumulado en negativo todavía no hay avance hacia el primer kilo.
+  const haciaElProximo = acumulado > 0 ? acumulado % KCAL_POR_KILO_DE_GRASA : 0;
+  const porcentaje = Math.floor((haciaElProximo / KCAL_POR_KILO_DE_GRASA) * 100);
+  const faltan = KCAL_POR_KILO_DE_GRASA - (acumulado > 0 ? haciaElProximo : acumulado);
+  const kgTeoricos = Math.max(0, acumulado / KCAL_POR_KILO_DE_GRASA).toLocaleString('es-AR', { maximumFractionDigits: 2 });
+
+  const lineas = [
+    '🎯 Progreso acumulado de grasa (estimado)',
+    `${barra(haciaElProximo, KCAL_POR_KILO_DE_GRASA, '🟩')} ${enKcal(haciaElProximo)} / ${enKcal(KCAL_POR_KILO_DE_GRASA)} kcal (${porcentaje}%)`,
+    `Faltan ${enKcal(faltan)} kcal para el próximo kilo`,
+    `Pérdida teórica: ~${kgTeoricos} kg en ${historial.length} ${historial.length === 1 ? 'día anotado' : 'días anotados'}`,
+  ];
+  if (acumulado < 0) lineas.push(`Por ahora el acumulado está en ${enKcal(acumulado)} kcal.`);
+  if (hitos.length > 0) lineas.push(`🏅 Hitos logrados: ${hitos.map((hito) => `${hito.kg} kg`).join(', ')}`);
+  lineas.push('Es una estimación energética, no una medición exacta de la grasa perdida.');
+  return lineas.join('\n');
+}
+
+// Felicitaciones por los hitos que todavía no se le contaron. Devuelve null si no hay ninguno.
+export async function textoHitosNuevos(usuario) {
+  const nuevos = (await hitosDeGrasa(usuario.chatId)).filter((hito) => !hito.avisado);
+  if (nuevos.length === 0) return null;
+  return nuevos
+    .map((hito) => `🏅 ¡Llegaste a ${hito.kg} kg de grasa perdida según tu balance! Es un cálculo teórico, pero refleja tu constancia. Seguimos hacia el siguiente 💪`)
+    .join('\n');
+}
+
+function estadoDelSaldo(saldo) {
+  if (Math.abs(saldo) < MARGEN_EQUILIBRIO) return 'equilibrio';
+  return saldo > 0 ? 'déficit' : 'superávit';
+}
+
+// "déficit de ~400 kcal"
+function textoEstado(saldo) {
+  const estado = estadoDelSaldo(saldo);
+  return estado === 'equilibrio' ? 'equilibrio' : `${estado} de ~${enKcal(Math.abs(saldo))} kcal`;
+}
+
+// Línea corta para el seguimiento durante el día. Sin comidas anotadas no dice nada:
+// "déficit de 1.800 kcal" a la mañana solo significa que todavía no comió.
+async function lineaBalance(usuario, fecha) {
+  const balance = await datosBalance(usuario, fecha);
+  if (!balance || balance.consumidas === 0) return null;
+  return `Balance hasta ahora: ${textoEstado(balance.saldo)}`;
+}
+
+function nombresDeEjercicios(ejercicios) {
+  return ejercicios.map((ejercicio) => ejercicio.descripcion.toLowerCase()).join(' + ');
+}
+
+// Respuesta al anotar un ejercicio.
+export async function mensajeEjercicio(usuario, ejercicio, fecha) {
+  const quemadasHoy = (await ejerciciosDelDia(usuario.chatId, fecha)).reduce((suma, e) => suma + e.kcal, 0);
+  const lineas = [
+    `Anotado: 🏃 ${ejercicio.descripcion}, ${Math.round(ejercicio.minutos)} min ~${enKcal(ejercicio.kcal)} kcal ✅`,
+    '',
+    `Quemadas hoy: ~${enKcal(quemadasHoy)} kcal (estimado)`,
+  ];
+  const balance = await lineaBalance(usuario, fecha);
+  if (balance) lineas.push(balance);
+  return lineas.join('\n');
+}
+
+// Balance para el resumen de la noche. Devuelve null si no hay comidas anotadas, porque
+// sin saber qué comió cualquier número sería inventado.
+export async function balanceDelDia(usuario, fecha) {
+  if ((await kcalDelDia(usuario.chatId, fecha)) === 0) return null;
+
+  const balance = await datosBalance(usuario, fecha);
+  if (!balance) return '🔥 Para ver si estás en déficit o superávit, tocá "🔥 Mi TMB" y calculamos tu metabolismo.';
+
+  const { tmb, tdee, consumidas, quemadas, ejercicios, saldo } = balance;
+  const detalle = ejercicios.length > 0 ? ` (${nombresDeEjercicios(ejercicios)})` : '';
+  const lineas = [
+    '⚖️ Balance del día (estimado)',
+    `• TMB: ${enKcal(tmb)} kcal`,
+    `• Actividad diaria y digestión: +${enKcal(tmb * (FACTOR_ACTIVIDAD - 1))} kcal`,
+    `• Ejercicio: +${enKcal(quemadas)} kcal${detalle}`,
+    `• Gasto total: ${enKcal(tdee)} kcal`,
+    `• Consumidas: ${enKcal(consumidas)} kcal`,
+    '',
+    `Estado: ${textoEstado(saldo)}`,
+  ];
+
+  const estado = estadoDelSaldo(saldo);
+  if (estado === 'déficit' && saldo > DEFICIT_MUY_GRANDE) {
+    lineas.push('Es bastante: fijate si te quedó alguna comida sin anotar 😉');
+  } else if (estado === 'superávit') {
+    lineas.push('Un día así no cambia nada: lo que cuenta es cómo viene la semana 💪');
+  }
+  lineas.push('', 'Son estimaciones, y las calorías del ejercicio pueden ser imprecisas. El peso de cada día también varía por agua y sal: eso no es un cambio real de grasa.');
+  return lineas.join('\n');
 }
 
 // ---------- Barras de progreso ----------
@@ -150,6 +368,9 @@ export async function mensajeComida({ usuario, encabezado, comida, fecha, descri
   );
   if (consejo) bloques.push(`💡 ${consejo}`);
   bloques.push(lineaKcal(await kcalDelDia(usuario.chatId, fecha), usuario));
+
+  const balance = await lineaBalance(usuario, fecha);
+  if (balance) bloques.push(balance);
 
   // La racha se muestra solo con la primera comida del día, para no repetirla en cada mensaje.
   const racha = esPrimeraDelDia ? await textoRachaComidas(usuario, fecha) : null;
@@ -290,6 +511,15 @@ export async function contextoDelDia(usuario, fechaHora) {
     lineas.push('Todavía no anotó comidas hoy.');
   }
 
+  const balance = await datosBalance(usuario, fecha);
+  if (balance) {
+    lineas.push(`TMB: ${enKcal(balance.tmb)} kcal. Gasto total estimado de hoy: ${enKcal(balance.tdee)} kcal.`);
+    if (balance.consumidas > 0) lineas.push(`Balance estimado hasta ahora: ${textoEstado(balance.saldo)}.`);
+    if (balance.ejercicios.length > 0) {
+      lineas.push(`Ejercicio de hoy: ${nombresDeEjercicios(balance.ejercicios)} (~${enKcal(balance.quemadas)} kcal quemadas).`);
+    }
+  }
+
   const peso = await ultimoPeso(usuario.chatId);
   if (peso !== null) {
     const meta = usuario.pesoObjetivo ? ` (meta: ${enKg(usuario.pesoObjetivo)} kg)` : '';
@@ -301,7 +531,8 @@ export async function contextoDelDia(usuario, fechaHora) {
 // ---------- Resúmenes ----------
 
 // Resumen del día: lo usan el botón "¿Cómo voy?" y el mensaje de cada noche.
-export async function resumenDelDia(usuario, fecha) {
+// El de la noche lo pide sin la línea de balance, porque ahí va el balance completo.
+export async function resumenDelDia(usuario, fecha, { conBalance = true } = {}) {
   const { chatId } = usuario;
   const cantidad = (await comidasDelDia(chatId, fecha)).length;
   const lineas = [];
@@ -312,6 +543,15 @@ export async function resumenDelDia(usuario, fecha) {
     lineas.push(`Comidas anotadas: ${cantidad}`, lineaKcal(await kcalDelDia(chatId, fecha), usuario));
   }
   lineas.push(lineaAgua(await aguaDelDia(chatId, fecha), usuario));
+
+  const ejercicios = await ejerciciosDelDia(chatId, fecha);
+  if (ejercicios.length > 0) {
+    const quemadas = ejercicios.reduce((suma, ejercicio) => suma + ejercicio.kcal, 0);
+    lineas.push(`Ejercicio: ${nombresDeEjercicios(ejercicios)} (~${enKcal(quemadas)} kcal)`);
+  }
+
+  const balance = conBalance ? await lineaBalance(usuario, fecha) : null;
+  if (balance) lineas.push(balance);
 
   const peso = await ultimoPesoDelDia(chatId, fecha);
   if (peso) lineas.push(`Peso: ${enKg(peso.kg)} kg`);
