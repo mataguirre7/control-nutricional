@@ -80,6 +80,8 @@ const AYUDA = [
   '🎯 Tus metas (ej: "quiero llegar a 85 kilos")',
   '❓ Cualquier pregunta (ej: "¿qué puedo cenar?")',
   '',
+  'También podés contarme varias cosas en un solo mensaje 😉',
+  '',
   'Los botones de abajo te ayudan con lo más común 👇',
 ].join('\n');
 
@@ -126,27 +128,48 @@ function numeroDelComando(ctx) {
   return texto === '' || Number.isNaN(valor) ? null : valor;
 }
 
-// Sirve tanto para los comandos (/meta_peso 85) como para frases ("quiero llegar a 85 kilos").
+// Guarda una meta y devuelve el texto para confirmarla (o para avisar que el número no sirve).
 // valor 0 saca la meta.
-async function cambiarMeta(ctx, nombreMeta, valor) {
+async function guardarUnaMeta(chatId, nombreMeta, valor) {
   const meta = METAS[nombreMeta];
 
   if (valor === 0) {
-    await guardarMeta(ctx.usuario.chatId, meta.columna, null);
-    await ctx.reply(`Listo, saqué tu meta de ${meta.etiqueta} ✅`, { reply_markup: tecladoPrincipal });
-    return;
+    await guardarMeta(chatId, meta.columna, null);
+    return `Listo, saqué tu meta de ${meta.etiqueta} ✅`;
   }
   // Para el agua aceptamos litros ("2") o mililitros ("2000").
   if (nombreMeta === 'agua' && valor !== null && valor < 20) {
     valor = valor * 1000;
   }
   if (valor === null || valor < meta.minimo || valor > meta.maximo) {
-    await ctx.reply(`No me quedó claro el número 🤔 Probá escribiendo, por ejemplo: "${meta.ejemplo}"`);
-    return;
+    return `No me quedó claro el número de tu meta de ${meta.etiqueta} 🤔 Probá escribiendo, por ejemplo: "${meta.ejemplo}"`;
   }
 
-  await guardarMeta(ctx.usuario.chatId, meta.columna, valor);
-  await ctx.reply(`Listo, tu meta de ${meta.etiqueta} es ${meta.mostrar(valor)} ✅`, { reply_markup: tecladoPrincipal });
+  await guardarMeta(chatId, meta.columna, valor);
+  return `Listo, tu meta de ${meta.etiqueta} es ${meta.mostrar(valor)} ✅`;
+}
+
+// Para los comandos (/meta_peso 85).
+async function cambiarMeta(ctx, nombreMeta, valor) {
+  const texto = await guardarUnaMeta(ctx.usuario.chatId, nombreMeta, valor);
+  await ctx.reply(texto, { reply_markup: tecladoPrincipal });
+}
+
+// Para las frases: guarda todas las metas que trae el mensaje y las confirma en una sola respuesta.
+// Devuelve true si había alguna.
+async function cambiarMetas(ctx, metas) {
+  const nombres = Object.keys(METAS).filter((nombre) => metas[nombre] !== null);
+  if (nombres.length === 0) return false;
+
+  const textos = [];
+  for (const nombre of nombres) {
+    textos.push(await guardarUnaMeta(ctx.usuario.chatId, nombre, metas[nombre]));
+  }
+  await ctx.reply(textos.join('\n'), { reply_markup: tecladoPrincipal });
+
+  // Releemos a la persona para que lo que sigue (por ejemplo, el avance del peso) ya use las metas nuevas.
+  ctx.usuario = await obtenerUsuario(ctx.usuario.chatId);
+  return true;
 }
 
 // Suma agua y responde con la barra (y el festejo si llegó a la meta).
@@ -180,9 +203,8 @@ async function registrarPeso(ctx, kg) {
   await ctx.reply(mensaje, { reply_markup: tecladoPrincipal });
 }
 
-async function registrarComida(ctx, analisis, fechaHora, fotoPath) {
+async function registrarComida(ctx, comida, analisis, fechaHora, fotoPath) {
   const { usuario } = ctx;
-  const comida = await calcularComida(analisis.items);
   const tipoComida = tipoComidaSegunHora(fechaHora);
   const idComida = await guardarComida({ chatId: usuario.chatId, fechaHora, tipoComida, fotoPath, ...comida });
 
@@ -200,22 +222,22 @@ async function registrarComida(ctx, analisis, fechaHora, fotoPath) {
   await ctx.reply(mensaje, { reply_markup: tecladoCorreccion(idComida) });
 }
 
-// Decide qué hacer según lo que entendió Claude. Sirve igual para fotos y para textos.
+// Anota todo lo que entendió Claude: un mismo mensaje puede traer metas, peso, agua y comida.
+// Sirve igual para fotos y para textos.
 async function responderAnalisis(ctx, analisis, fechaHora, fotoPath = null) {
-  if (analisis.tipo === 'comida' && analisis.items.length > 0) {
-    await registrarComida(ctx, analisis, fechaHora, fotoPath);
-  } else if (analisis.tipo === 'balanza' && analisis.kg) {
-    await registrarPeso(ctx, analisis.kg);
-  } else if (analisis.tipo === 'balanza') {
-    await ctx.reply('No pude leer el número de la balanza 🤔 Probá con otra foto o escribilo (ej: 72.5).');
-  } else if (analisis.tipo === 'agua') {
-    // Si no dijo cuánto, es un vaso.
-    await sumarAgua(ctx, analisis.agua_ml ?? config.vasoMl);
-  } else if (analisis.tipo === 'meta' && analisis.meta !== 'ninguna') {
-    await cambiarMeta(ctx, analisis.meta, analisis.meta_valor);
-  } else {
-    await ctx.reply(analisis.respuesta || `No te entendí 🤔\n\n${AYUDA}`, { reply_markup: tecladoPrincipal });
-  }
+  // La comida se calcula antes de anotar nada, porque depende de USDA. Si USDA falla, no queda
+  // nada a medias y al reintentar no se duplican el peso ni el agua.
+  const comida = analisis.items.length > 0 ? await calcularComida(analisis.items) : null;
+
+  // Las metas van primero, así el mensaje del peso ya muestra el avance hacia la meta nueva.
+  const huboMetas = await cambiarMetas(ctx, analisis.metas);
+  if (analisis.kg) await registrarPeso(ctx, analisis.kg);
+  if (analisis.agua_ml) await sumarAgua(ctx, analisis.agua_ml);
+  if (comida) await registrarComida(ctx, comida, analisis, fechaHora, fotoPath);
+  if (analisis.respuesta) await ctx.reply(analisis.respuesta, { reply_markup: tecladoPrincipal });
+
+  const noEntendio = !huboMetas && !analisis.kg && !analisis.agua_ml && !comida && !analisis.respuesta;
+  if (noEntendio) await ctx.reply(`No te entendí 🤔\n\n${AYUDA}`, { reply_markup: tecladoPrincipal });
 }
 
 // Qué hace cada botón fijo. Se revisa antes de llamar a Claude, así tocar un botón no cuesta nada.

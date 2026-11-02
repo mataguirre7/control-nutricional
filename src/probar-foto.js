@@ -31,7 +31,7 @@ verificarVariables(['ANTHROPIC_API_KEY', 'USDA_API_KEY']);
 // Sin base de datos no hay contexto real del día, así que le pasamos uno vacío.
 const analisis = await analizarFoto(fs.readFileSync(ruta), tipoMime, 'Sin datos (prueba desde la consola).');
 const resultado = { analisis_claude: analisis };
-if (analisis.tipo === 'comida' && analisis.items.length > 0) {
+if (analisis.items.length > 0) {
   resultado.comida = await calcularComida(analisis.items);
 }
 

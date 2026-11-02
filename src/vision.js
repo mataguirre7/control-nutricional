@@ -14,15 +14,19 @@ const INSTRUCCIONES_ANALISIS = `${PERSONALIDAD}
 
 Vas a recibir el contexto de su día y un mensaje suyo: una foto (a veces con un texto) o solo un texto.
 
-Clasificá el mensaje en "tipo":
-- "comida": una foto de comida o bebida, o un texto donde cuenta qué comió o está comiendo (ej: "comí 2 empanadas de carne").
-- "balanza": una foto de una balanza, o un texto donde dice cuánto pesa (ej: "hoy me pesé 80,5").
-- "agua": cuenta que tomó agua (ej: "tomé 2 vasos de agua", "me tomé una botellita").
-- "meta": quiere poner, cambiar o sacar una meta de peso, calorías o agua (ej: "quiero llegar a 85 kilos", "mi meta es comer 1600 calorías").
-- "pregunta": una pregunta o pedido sobre comida, nutrición, recetas o su progreso (ej: "¿qué puedo cenar?").
-- "otro": cualquier otra cosa (saludos, agradecimientos, fotos que no son comida ni balanza).
+Un mismo mensaje puede traer varias cosas a la vez. Completá TODOS los campos que correspondan y dejá vacíos los demás: textos en "", números en null e "items" en [].
 
-Si es "comida":
+Ejemplo: "Peso 105 kilos, quiero llegar a 85, comer 1600 calorías por día y tomar 2 litros de agua. Hoy ya tomé 2 vasos y almorcé una milanesa con ensalada." → "kg": 105; "metas": peso 85, kcal 1600, agua 2000; "agua_ml": ${config.vasoMl * 2}; "items": la milanesa y la ensalada.
+
+"kg" es su peso actual: el número que muestra una balanza en la foto o el que cuenta que pesa. No lo confundas con el peso al que quiere llegar. Si la foto es de una balanza que no se puede leer, dejalo en null y pedile en "respuesta" otra foto o que te escriba el número.
+
+"agua_ml" es el agua que YA tomó, en mililitros (no la que quiere tomar). Un vaso son ${config.vasoMl} ml, una botellita 500 ml y un litro 1000 ml. Si cuenta que tomó agua sin decir cuánto, es un vaso.
+
+"metas" es lo que quiere lograr: "peso" en kilos, "kcal" en calorías por día y "agua" en mililitros por día (2 litros = 2000). Si pide sacar o borrar una meta, poné esa meta en 0.
+
+"items" es lo que YA comió o está comiendo, o lo que se ve en una foto de comida o bebida. No incluyas lo que piensa comer, lo que suele comer en general ni lo que pregunta si puede comer.
+
+Si hay "items":
 - Es comida casera argentina. Pensá en preparaciones típicas de una casa argentina (milanesas, tartas, guisos, empanadas, pastas, ensaladas, etc.).
 - Listá cada alimento por separado, con su nombre en español y un término de búsqueda en inglés, simple y genérico, como figuraría en la base de datos USDA (ej: "beef, ground, cooked", "rice, white, cooked", "lettuce, raw").
 - Estimá los gramos de cada alimento. En una foto, usá el plato y los cubiertos como referencia de tamaño. En un texto sin cantidades, usá porciones caseras típicas.
@@ -32,31 +36,29 @@ Si es "comida":
 - En "descripcion" escribí una sola frase corta y simple de lo que comió (ej: "Arroz amarillo con pollo, morrón y perejil").
 - En "consejo" escribí una sola frase corta, amable y concreta para sumar algo bueno (ej: "¡Buen plato! Si la próxima le sumás ensalada, te llena más con pocas calorías 🥗"). Tené en cuenta el contexto del día.
 
-Si es "balanza": poné en "kg" el número que muestra la pantalla o que escribió. Si no se puede leer, poné "kg" en null.
+"respuesta" se usa en estos casos:
+- Si pregunta o pide algo sobre comida, nutrición, recetas o su progreso (ej: "¿qué puedo cenar?"): contestá en 2 a 4 oraciones cortas y prácticas, usando el contexto del día (lo que ya comió, calorías y agua que lleva, sus metas). Sugerí comidas caseras argentinas simples.
+- Si el mensaje no trae ningún dato ni pregunta (saludos, agradecimientos, fotos que no son comida ni balanza): contestá breve y amable, y recordale que puede mandarte fotos de lo que come o de la balanza, contarte qué comió o hacerte preguntas.
+- Si trae datos y no pregunta nada, dejala vacía: el bot ya confirma cada dato.`;
 
-Si es "agua": poné en "agua_ml" el total de mililitros que tomó. Un vaso son ${config.vasoMl} ml, una botellita 500 ml y un litro 1000 ml. Si no dice cuánto, es un vaso.
-
-Si es "meta": en "meta" poné "peso", "kcal" o "agua", y en "meta_valor" el número: kilos para el peso, calorías por día para kcal, y mililitros por día para el agua (2 litros = 2000). Si pide sacar o borrar una meta, poné "meta_valor" en 0.
-
-Si es "pregunta": en "respuesta" contestá en 2 a 4 oraciones cortas y prácticas, usando el contexto del día (lo que ya comió, calorías y agua que lleva, sus metas). Sugerí comidas caseras argentinas simples.
-
-Si es "otro": en "respuesta" contestá breve y amable, y recordale que puede mandarte fotos de lo que come o de la balanza, contarte qué comió o hacerte preguntas.
-
-Los campos que no correspondan al tipo dejalos vacíos: textos en "", números en null, "meta" en "ninguna" e "items" en [].`;
+const NUMERO_O_NULL = { anyOf: [{ type: 'number' }, { type: 'null' }] };
 
 // Esquema JSON que Claude está obligado a respetar (salida estructurada).
 // Así no tenemos que adivinar el formato de la respuesta.
 const ESQUEMA_ANALISIS = {
   type: 'object',
   properties: {
-    tipo: { type: 'string', enum: ['comida', 'balanza', 'agua', 'meta', 'pregunta', 'otro'] },
     descripcion: { type: 'string' },
     consejo: { type: 'string' },
     respuesta: { type: 'string' },
-    kg: { anyOf: [{ type: 'number' }, { type: 'null' }] },
-    agua_ml: { anyOf: [{ type: 'number' }, { type: 'null' }] },
-    meta: { type: 'string', enum: ['peso', 'kcal', 'agua', 'ninguna'] },
-    meta_valor: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    kg: NUMERO_O_NULL,
+    agua_ml: NUMERO_O_NULL,
+    metas: {
+      type: 'object',
+      properties: { peso: NUMERO_O_NULL, kcal: NUMERO_O_NULL, agua: NUMERO_O_NULL },
+      required: ['peso', 'kcal', 'agua'],
+      additionalProperties: false,
+    },
     items: {
       type: 'array',
       items: {
@@ -78,7 +80,7 @@ const ESQUEMA_ANALISIS = {
       },
     },
   },
-  required: ['tipo', 'descripcion', 'consejo', 'respuesta', 'kg', 'agua_ml', 'meta', 'meta_valor', 'items'],
+  required: ['descripcion', 'consejo', 'respuesta', 'kg', 'agua_ml', 'metas', 'items'],
   additionalProperties: false,
 };
 
@@ -110,7 +112,7 @@ async function analizar(contenido) {
 
 // imagen: Buffer con la foto. tipoMime: "image/jpeg", "image/png", etc.
 // textoAdjunto: el texto que mandó con la foto (puede ser vacío).
-// Devuelve { tipo, descripcion, consejo, respuesta, kg, agua_ml, meta, meta_valor, items }.
+// Devuelve { descripcion, consejo, respuesta, kg, agua_ml, metas, items }.
 export function analizarFoto(imagen, tipoMime, contextoDelDia, textoAdjunto = '') {
   return analizar([
     { type: 'image', source: { type: 'base64', media_type: tipoMime, data: imagen.toString('base64') } },

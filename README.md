@@ -150,6 +150,7 @@ No hace falta saber comandos. Abajo del chat quedan siempre 4 botones grandes, y
 | Toca **🎯 Mis metas**, o escribe "quiero llegar a 85 kilos" | Muestra o cambia sus metas |
 | Toca **❓ Ayuda** | Le recuerda todo lo que puede mandar |
 | Pregunta algo ("¿qué puedo cenar?") | Claude le responde usando lo que ya comió y sus metas |
+| Cuenta varias cosas juntas ("peso 98, quiero llegar a 75, tomé 3 vasos y almorcé empanadas") | Anota todo: primero las metas y después el peso, el agua y la comida |
 
 El tipo de comida (desayuno, almuerzo, merienda o cena) se deduce por la hora. Los rangos están en `RANGOS_COMIDAS`, dentro de [src/config.js](src/config.js).
 
@@ -289,7 +290,7 @@ La base de datos es **Postgres** y corre en su propio contenedor (`db`), con los
 Así se procesa una foto de comida:
 
 1. [bot.js](src/bot.js) descarga la foto de Telegram y la guarda en `data/fotos/`.
-2. [vision.js](src/vision.js) se la manda a Claude, que devuelve `tipo`, `kg` e `items`. Cada item trae nombre, término en inglés, gramos, confianza y nutrientes estimados.
+2. [vision.js](src/vision.js) se la manda a Claude, que completa todos los datos que encuentre en el mensaje: `kg`, `agua_ml`, `metas`, `items` y `respuesta`. Cada item trae nombre, término en inglés, gramos, confianza y nutrientes estimados.
 3. [nutrition.js](src/nutrition.js) busca cada item en USDA. Primero prueba con los tipos *Foundation* y *SR Legacy*. Si no encuentra nada, prueba con *Survey (FNDDS)*. Toma el primer resultado y escala los valores, que USDA da cada 100 g, a los gramos estimados. Si ninguna búsqueda da resultado, usa la estimación de Claude.
 4. [db.js](src/db.js) guarda la comida y sus items en Postgres.
 
