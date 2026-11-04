@@ -56,24 +56,60 @@ function contieneTodasLasPalabras(descripcion, termino) {
   return palabras(termino).every((palabra) => palabrasDescripcion.includes(palabra));
 }
 
-// Busca un término en USDA y devuelve el alimento más adecuado, o null si no hay nada.
+// Busca un término en USDA y devuelve el alimento que corresponde, o null si no está.
 async function buscarEnUsda(termino) {
   // Primero probamos solo con los tipos más confiables (Foundation y SR Legacy).
   // Si no aparece nada, probamos con platos preparados (Survey) antes de rendirnos.
   const intentos = [['Foundation', 'SR Legacy'], ['Survey (FNDDS)']];
 
   // USDA ordena por parecido de texto y el primero no siempre es el correcto
-  // (ej: "chicken, thigh" devolvía primero la piel). Por eso nos quedamos con
-  // el primero que tenga todas las palabras del término. Si ninguno las tiene,
-  // usamos el primer resultado que haya aparecido.
-  let primerResultado = null;
+  // (ej: "chicken, thigh" devolvía primero la piel). Por eso solo aceptamos un resultado
+  // que tenga todas las palabras del término. Si ninguno las tiene, el alimento no está:
+  // tomar el primero que aparezca daba disparates, como "canelones de ricota y espinaca"
+  // calculados con los valores de la espinaca cruda (23 kcal cada 100 g).
   for (const tiposDeDatos of intentos) {
     const alimentos = await pedirAUsda(termino, tiposDeDatos);
     const coincidencia = alimentos.find((alimento) => contieneTodasLasPalabras(alimento.description, termino));
     if (coincidencia) return coincidencia;
-    primerResultado ??= alimentos[0] ?? null;
   }
-  return primerResultado;
+  return null;
+}
+
+// Si las kcal cada 100 g de USDA y de la estimación de Claude difieren más que esto (para
+// arriba o para abajo), lo más probable es que USDA haya encontrado otra cosa: el alimento
+// crudo en vez de cocido, o un ingrediente en vez del plato.
+const DIFERENCIA_MAXIMA_CON_USDA = 1.6;
+
+// Las calorías tienen que cuadrar con los macronutrientes (4 kcal por gramo de proteína y de
+// carbohidratos, 9 por gramo de grasa). Más diferencia que esto se avisa en los logs.
+const TOLERANCIA_ATWATER = 0.25;
+
+function kcalSegunMacros(nutrientes) {
+  return 4 * (nutrientes.proteina_g ?? 0) + 4 * (nutrientes.carbohidratos_g ?? 0) + 9 * (nutrientes.grasa_g ?? 0);
+}
+
+// true si las kcal cuadran con los macros. Los alimentos de muy pocas calorías no se revisan:
+// ahí el redondeo pesa más que cualquier error.
+export function esConsistente(nutrientes) {
+  if (nutrientes.kcal < 20) return true;
+  return Math.abs(nutrientes.kcal - kcalSegunMacros(nutrientes)) / nutrientes.kcal <= TOLERANCIA_ATWATER;
+}
+
+function nutrientesEstimados(item) {
+  const nutrientes = {};
+  for (const clave of NUTRIENTES) {
+    nutrientes[clave] = redondear(item.nutrientes_estimados[clave] ?? 0);
+  }
+  return nutrientes;
+}
+
+function nutrientesDeUsda(alimentoUsda, gramos) {
+  const factor = gramos / 100;
+  const nutrientes = {};
+  for (const [clave, codigos] of Object.entries(CODIGOS_USDA)) {
+    nutrientes[clave] = redondear(valorCada100g(alimentoUsda, codigos) * factor);
+  }
+  return nutrientes;
 }
 
 // USDA informa los valores cada 100 g. Si un nutriente no figura, lo tomamos como 0.
@@ -85,26 +121,34 @@ function valorCada100g(alimentoUsda, codigos) {
   return 0;
 }
 
-// Calcula un alimento: con USDA si lo encuentra; si no, con la estimación de Claude.
+// Calcula un alimento: con USDA si encuentra ese mismo alimento con valores razonables;
+// si no, con la estimación de Claude.
 async function calcularItem(item) {
+  const estimado = nutrientesEstimados(item);
   const alimentoUsda = await buscarEnUsda(item.termino_busqueda);
 
+  let resultado = { nombre: item.nombre, gramos: item.gramos, fuente: 'estimado_ia', nutrientes: estimado };
   if (!alimentoUsda) {
     console.log(`USDA: no encontré "${item.termino_busqueda}", uso la estimación de Claude`);
-    const nutrientes = {};
-    for (const clave of NUTRIENTES) {
-      nutrientes[clave] = redondear(item.nutrientes_estimados[clave]);
+  } else {
+    const deUsda = nutrientesDeUsda(alimentoUsda, item.gramos);
+    const proporcion = deUsda.kcal / Math.max(estimado.kcal, 1);
+    const coinciden = proporcion <= DIFERENCIA_MAXIMA_CON_USDA && proporcion >= 1 / DIFERENCIA_MAXIMA_CON_USDA;
+    if (coinciden || estimado.kcal === 0) {
+      console.log(`USDA: "${item.termino_busqueda}" → "${alimentoUsda.description}" (${alimentoUsda.dataType})`);
+      resultado = { ...resultado, fuente: 'usda', nutrientes: deUsda };
+    } else {
+      console.log(
+        `USDA: descarto "${alimentoUsda.description}" para "${item.termino_busqueda}": ` +
+          `${deUsda.kcal} kcal contra ${estimado.kcal} estimadas para ${item.gramos} g. Uso la estimación de Claude`
+      );
     }
-    return { nombre: item.nombre, gramos: item.gramos, fuente: 'estimado_ia', nutrientes };
   }
 
-  console.log(`USDA: "${item.termino_busqueda}" → "${alimentoUsda.description}" (${alimentoUsda.dataType})`);
-  const factor = item.gramos / 100;
-  const nutrientes = {};
-  for (const [clave, codigos] of Object.entries(CODIGOS_USDA)) {
-    nutrientes[clave] = redondear(valorCada100g(alimentoUsda, codigos) * factor);
+  if (!esConsistente(resultado.nutrientes)) {
+    console.log(`Aviso: las kcal de "${item.nombre}" no cuadran con sus macros (${resultado.nutrientes.kcal} contra ${Math.round(kcalSegunMacros(resultado.nutrientes))})`);
   }
-  return { nombre: item.nombre, gramos: item.gramos, fuente: 'usda', nutrientes };
+  return resultado;
 }
 
 // Suma una lista de objetos de nutrientes y devuelve el total.

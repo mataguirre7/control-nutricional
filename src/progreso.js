@@ -18,6 +18,7 @@ import {
   primerPeso,
   promedioPeso,
   ejerciciosDelDia,
+  ultimaComida,
   hoyLocal,
   pesoParaFecha,
   guardarBalanceDiario,
@@ -381,7 +382,7 @@ async function textoRachaComidas(usuario, fecha) {
 //   Calorías: 🟩🟩🟩🟩🟩🟩⬜⬜ 1.150 / 1.600
 //
 //   🔥 Racha: 6 días seguidos anotando
-export async function mensajeComida({ usuario, encabezado, comida, fecha, descripcion = '', consejo = '', esPrimeraDelDia = false }) {
+export async function mensajeComida({ usuario, encabezado, comida, fecha, descripcion = '', supuestos = '', consejo = '', esPrimeraDelDia = false }) {
   const { items, totales } = comida;
   const bloques = [encabezado];
 
@@ -391,6 +392,9 @@ export async function mensajeComida({ usuario, encabezado, comida, fecha, descri
     `Proteínas ${Math.round(totales.proteina_g)} g · Carbohidratos ${Math.round(totales.carbohidratos_g)} g · ` +
       `Grasas ${Math.round(totales.grasa_g)} g · Fibra ${Math.round(totales.fibra_g)} g`
   );
+  // Lo que Claude tuvo que suponer (tamaño de porción, ingredientes que no se ven): así se ve
+  // cuánta incertidumbre tiene la estimación.
+  if (supuestos) bloques.push(`ℹ️ Estimación aproximada: ${supuestos}`);
   if (consejo) bloques.push(`💡 ${consejo}`);
   bloques.push(lineaKcal(await kcalDelDia(usuario.chatId, fecha), usuario));
 
@@ -534,6 +538,13 @@ export async function contextoDelDia(usuario, fechaHora) {
     lineas.push(`Comidas de hoy: ${detalle.join('; ')}.`);
   } else {
     lineas.push('Todavía no anotó comidas hoy.');
+  }
+
+  // Para que Claude sepa qué comida se quiere corregir cuando dice "corregí mi cena".
+  const ultima = await ultimaComida(usuario.chatId);
+  if (ultima) {
+    const alimentos = ultima.items.map((item) => `${item.nombre} ${Math.round(item.gramos)} g`).join(', ');
+    lineas.push(`Última comida anotada: ${ultima.tipo_comida} del ${ultima.fecha_hora} (${alimentos}; ~${enKcal(ultima.totales.kcal)} kcal).`);
   }
 
   const balance = await datosBalance(usuario, fecha);

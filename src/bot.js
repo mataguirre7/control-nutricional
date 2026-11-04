@@ -21,6 +21,9 @@ import {
   guardarComida,
   comidaPorId,
   actualizarComida,
+  reemplazarComida,
+  ultimaComida,
+  sumarDias,
   borrarComida,
   comidasDelDia,
   kcalDelDia,
@@ -235,10 +238,34 @@ async function registrarComida(ctx, comida, analisis, fechaHora, fotoPath) {
     comida,
     fecha,
     descripcion: analisis.descripcion,
+    supuestos: analisis.supuestos,
     consejo: analisis.consejo,
     esPrimeraDelDia: (await comidasDelDia(usuario.chatId, fecha)).length === 1,
   });
   await ctx.reply(mensaje, { reply_markup: tecladoCorreccion(idComida) });
+}
+
+// "Corregí mi cena: fueron 2 canelones medianos": reemplaza la última comida en vez de sumar
+// otra, así sus calorías no se cuentan dos veces. Solo toca una comida de hoy o de ayer: una
+// más vieja difícilmente sea la que quiere corregir. Devuelve false si no había ninguna.
+async function corregirUltimaComida(ctx, comida, analisis) {
+  const { usuario } = ctx;
+  const anterior = await ultimaComida(usuario.chatId);
+  if (!anterior || anterior.fecha_hora.slice(0, 10) < sumarDias(hoyLocal(), -1)) return false;
+
+  await reemplazarComida(anterior.id, comida);
+  const fecha = anterior.fecha_hora.slice(0, 10);
+  await actualizarSiCorresponde(usuario, fecha);
+  const mensaje = await mensajeComida({
+    usuario,
+    encabezado: `Corregido: ${anterior.tipo_comida} ~${enKcal(comida.totales.kcal)} kcal ✅ (antes ~${enKcal(anterior.totales.kcal)} kcal)`,
+    comida,
+    fecha,
+    descripcion: analisis.descripcion,
+    supuestos: analisis.supuestos,
+  });
+  await ctx.reply(mensaje, { reply_markup: tecladoCorreccion(anterior.id) });
+  return true;
 }
 
 async function registrarEjercicios(ctx, ejercicios, fechaHora) {
@@ -408,7 +435,10 @@ async function responderAnalisis(ctx, analisis, fechaHora, fotoPath = null) {
   if (analisis.kg) await registrarPeso(ctx, analisis.kg);
   if (analisis.agua_ml) await sumarAgua(ctx, analisis.agua_ml);
   await registrarEjercicios(ctx, ejercicios, fechaHora);
-  if (comida) await registrarComida(ctx, comida, analisis, fechaHora, fotoPath);
+  if (comida) {
+    const corrigio = analisis.corrige_comida_anterior && (await corregirUltimaComida(ctx, comida, analisis));
+    if (!corrigio) await registrarComida(ctx, comida, analisis, fechaHora, fotoPath);
+  }
   if (analisis.respuesta) await ctx.reply(analisis.respuesta, { reply_markup: tecladoPrincipal });
 
   const quiereTmb = analisis.calcular_tmb || huboDatos;

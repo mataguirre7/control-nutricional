@@ -142,7 +142,8 @@ No hace falta saber comandos. Abajo del chat quedan siempre 4 botones grandes, y
 |---|---|
 | Manda una foto de comida | La anota y responde con descripción, ingredientes, macros, un consejo amable 💡, la barra de calorías del día y la racha |
 | Cuenta lo que comió ("comí 2 empanadas de carne") | Lo mismo que con la foto |
-| Toca **➖ Era menos** / **➕ Era más** | Corrige la porción (×0,8 / ×1,25; uno deshace al otro) |
+| Toca **➖ Era menos** / **➕ Era más** | Corrige la porción (×0,8 / ×1,25; uno deshace al otro). Cada toque vuelve a multiplicar: tres toques de "Era más" son casi el doble |
+| Escribe "corregí mi cena: fueron 2 canelones medianos" | **Reemplaza** la última comida (de hoy o de ayer) con la nueva estimación, sin sumar otra. Responde con el valor nuevo y el anterior |
 | Toca **🗑️ Borrar** | Pide confirmación y borra la comida |
 | Manda una foto de la balanza, o escribe `72.5` | Anota el peso y responde con el avance: desde el inicio, % hacia la meta, promedio semanal, cambio desde la vez anterior y logros 🏅 |
 | Toca **💧 Tomé un vaso** (o **+1 vaso** en los recordatorios), o escribe "tomé 2 vasos" | Suma agua y muestra la barra; festeja cuando cumple la meta del día |
@@ -307,6 +308,21 @@ npm run probar-foto -- ruta/a/foto.jpg
 
 El comando imprime lo que devolvió Claude (`analisis_claude`) y, si la foto es de comida, el cálculo final (`comida`). No guarda nada en la base de datos.
 
+## Revisar las comidas ya guardadas
+
+Vuelve a calcular los nutrientes de cada comida guardada con la estimación actual y muestra cuáles cambian más de un 20%. Sirve después de un arreglo en la estimación. En el server:
+
+```bash
+cd ~/control-nutricional
+docker compose exec control-nutricional npm run revisar-comidas                # solo muestra, no cambia nada
+docker compose exec control-nutricional npm run revisar-comidas -- --aplicar   # además corrige las que cambian
+```
+
+- Mantiene los gramos guardados (pueden venir de una corrección con "Era más" o "Era menos") y recalcula solo los nutrientes.
+- Al corregir, recalcula también el progreso de grasa.
+- Avisa las **posibles duplicadas** (misma persona, menos de una hora de diferencia) sin borrarlas: se revisan a mano.
+- Cada comida es una llamada a Claude: unos centavos cada una.
+
 ---
 
 ## Cómo está armado
@@ -323,6 +339,7 @@ src/
   reminders.js    # recordatorios inteligentes y resúmenes con node-cron
   api.js          # endpoints de Express
   probar-foto.js  # script para probar una foto desde la consola
+  revisar-comidas.js  # recalcula las comidas ya guardadas con la estimación actual
 data/fotos/       # fotos de las comidas (no se sube a git)
 ```
 
@@ -332,7 +349,13 @@ Así se procesa una foto de comida:
 
 1. [bot.js](src/bot.js) descarga la foto de Telegram y la guarda en `data/fotos/`.
 2. [vision.js](src/vision.js) se la manda a Claude, que completa todos los datos que encuentre en el mensaje: `kg`, `agua_ml`, `metas`, `items` y `respuesta`. Cada item trae nombre, término en inglés, gramos, confianza y nutrientes estimados.
-3. [nutrition.js](src/nutrition.js) busca cada item en USDA. Primero prueba con los tipos *Foundation* y *SR Legacy*. Si no encuentra nada, prueba con *Survey (FNDDS)*. Toma el primer resultado y escala los valores, que USDA da cada 100 g, a los gramos estimados. Si ninguna búsqueda da resultado, usa la estimación de Claude.
+3. [nutrition.js](src/nutrition.js) busca cada item en USDA y escala los valores, que USDA da cada 100 g, a los gramos estimados. Para usar un resultado de USDA se tienen que cumplir dos cosas:
+   - Que sea el mismo alimento: la descripción de USDA tiene todas las palabras del término. Si no, el alimento no está en USDA.
+   - Que sus calorías se parezcan a la estimación de Claude, sin ser más de 1,6 veces mayores ni menores. Si no, casi seguro es otra cosa (crudo en vez de cocido, o un ingrediente en vez del plato).
+
+   Si no se cumplen, usa la estimación de Claude (`fuente: "estimado_ia"`). Antes se usaba el primer resultado aunque fuera otro alimento: por eso unos canelones de ricota y espinaca se calcularon con los valores de la espinaca cruda (23 kcal cada 100 g).
+
+   Claude estima primero la porción real y después los nutrientes, sin ajustar gramos para llegar a un número, y con calorías que cuadran con los macros (4 kcal por gramo de proteína y de carbohidratos, 9 por gramo de grasa). Lo que tuvo que suponer se muestra en el mensaje como "ℹ️ Estimación aproximada".
 4. [db.js](src/db.js) guarda la comida y sus items en Postgres.
 
 ### Backup

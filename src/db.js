@@ -436,6 +436,38 @@ export async function actualizarComida(id, items, totales) {
   });
 }
 
+// Reemplaza los alimentos y los totales de una comida ya guardada, manteniendo su fecha y su
+// tipo. Así corregir una comida no la duplica.
+export async function reemplazarComida(id, { items, totales, confianza }) {
+  await enTransaccion(async (cliente) => {
+    await cliente.query('DELETE FROM comida_items WHERE comida_id = $1', [id]);
+    for (const item of items) {
+      await cliente.query(
+        `INSERT INTO comida_items (comida_id, nombre, gramos, nutrientes_json, fuente)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, item.nombre, item.gramos, JSON.stringify(item.nutrientes), item.fuente]
+      );
+    }
+    await cliente.query('UPDATE comidas SET totales_json = $1, confianza = $2 WHERE id = $3', [JSON.stringify(totales), confianza, id]);
+  });
+}
+
+// La última comida que anotó la persona (con sus items), o null.
+export async function ultimaComida(chatId) {
+  const ultima = await fila('SELECT id FROM comidas WHERE chat_id = $1 ORDER BY fecha_hora DESC, id DESC LIMIT 1', [chatId]);
+  return ultima ? comidaPorId(chatId, ultima.id) : null;
+}
+
+// Todas las comidas guardadas, de todas las personas, con sus items. La usa la revisión de comidas.
+export async function todasLasComidas() {
+  const comidas = await filas('SELECT id, chat_id FROM comidas ORDER BY chat_id, fecha_hora, id');
+  const resultado = [];
+  for (const comida of comidas) {
+    resultado.push({ chatId: comida.chat_id, ...(await comidaPorId(comida.chat_id, comida.id)) });
+  }
+  return resultado;
+}
+
 // Los items se borran solos con la comida (ON DELETE CASCADE en la tabla).
 export async function borrarComida(id) {
   await pool.query('DELETE FROM comidas WHERE id = $1', [id]);
