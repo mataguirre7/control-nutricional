@@ -13,11 +13,27 @@ import { reestimarAlimentos } from './vision.js';
 import { calcularComida, esConsistente } from './nutrition.js';
 import { recalcularHistorial } from './progreso.js';
 
-// Una comida se marca para corregir si sus calorías cambian más que esto.
+// Una comida se marca para corregir si sus calorías totales cambian más que esto...
 const CAMBIO_MINIMO = 0.2;
 
-// Dos comidas de la misma persona con menos de esta diferencia pueden ser la misma anotada dos veces.
+// ...o si algún alimento cambia más que esto Y más que estas kcal. Así se detecta un alimento mal
+// calculado dentro de una comida grande (su error se "diluye" en el total), sin corregir las
+// diferencias chicas normales entre una estimación y otra.
+const CAMBIO_MINIMO_ALIMENTO = 0.5;
+const KCAL_MINIMAS_ALIMENTO = 50;
+
+// Dos comidas de la misma persona, con menos de esta diferencia y con algún alimento en común,
+// pueden ser la misma anotada dos veces.
 const MINUTOS_POSIBLE_DUPLICADA = 60;
+
+function alimentoCambioMucho(antes, despues) {
+  const diferencia = Math.abs(despues - antes);
+  return diferencia > KCAL_MINIMAS_ALIMENTO && diferencia / Math.max(antes, 1) > CAMBIO_MINIMO_ALIMENTO;
+}
+
+function nombresDeAlimentos(comida) {
+  return new Set(comida.items.map((item) => item.nombre.toLowerCase().trim()));
+}
 
 const aplicar = process.argv.includes('--aplicar');
 verificarVariables(['ANTHROPIC_API_KEY', 'USDA_API_KEY', 'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD']);
@@ -46,40 +62,48 @@ for (const comida of comidas) {
     const despues = nueva.totales.kcal;
     const cambio = Math.abs(despues - antes) / Math.max(antes, 1);
     const inconsistentes = comida.items.filter((item) => !esConsistente(item.nutrientes)).length;
+    const alimentosMal = comida.items.filter((item, i) => alimentoCambioMucho(item.nutrientes.kcal, nueva.items[i].nutrientes.kcal));
+    const corregir = cambio > CAMBIO_MINIMO || alimentosMal.length > 0;
 
-    const marca = cambio > CAMBIO_MINIMO ? '✗ ' : '✓ ';
+    const marca = corregir ? '✗ ' : '✓ ';
     console.log(`${marca}${titulo}: ${Math.round(antes)} → ${Math.round(despues)} kcal (${Math.round(cambio * 100)}% de diferencia)`);
     comida.items.forEach((item, i) => {
       const nuevoItem = nueva.items[i];
       const densidadAntes = Math.round((item.nutrientes.kcal / item.gramos) * 100);
       const densidadDespues = Math.round((nuevoItem.nutrientes.kcal / nuevoItem.gramos) * 100);
+      const senal = alimentosMal.includes(item) ? '  ← mal calculado' : '';
       console.log(
         `     ${item.nombre}, ${Math.round(item.gramos)} g: ${Math.round(item.nutrientes.kcal)} → ${Math.round(nuevoItem.nutrientes.kcal)} kcal` +
-          ` (${densidadAntes} → ${densidadDespues} kcal cada 100 g, ${item.fuente} → ${nuevoItem.fuente})`
+          ` (${densidadAntes} → ${densidadDespues} kcal cada 100 g, ${item.fuente} → ${nuevoItem.fuente})${senal}`
       );
     });
     if (inconsistentes > 0) console.log(`     ${inconsistentes} alimento(s) guardados con kcal que no cuadraban con sus macros`);
     console.log('');
 
-    if (cambio > CAMBIO_MINIMO) aCorregir.push({ comida, nueva });
+    if (corregir) aCorregir.push({ comida, nueva });
   } catch (error) {
     sinRevisar.push(titulo);
     console.log(`?  ${titulo}: no pude revisarla (${error.message})\n`);
   }
 }
 
-// Posibles duplicadas: solo se avisan, porque dos comidas seguidas también pueden ser reales.
+// Posibles duplicadas: solo se avisan, porque dos comidas seguidas con algo en común también
+// pueden ser reales. Se comparan todas las de la misma persona, no solo las que quedaron juntas.
 const posiblesDuplicadas = [];
-for (let i = 1; i < comidas.length; i++) {
-  const [a, b] = [comidas[i - 1], comidas[i]];
-  if (a.chatId === b.chatId && minutosEntre(a.fecha_hora, b.fecha_hora) < MINUTOS_POSIBLE_DUPLICADA) {
-    posiblesDuplicadas.push(`#${a.id} y #${b.id} (${a.chatId}, ${a.fecha_hora} y ${b.fecha_hora})`);
+for (let i = 0; i < comidas.length; i++) {
+  for (let j = i + 1; j < comidas.length; j++) {
+    const [a, b] = [comidas[i], comidas[j]];
+    if (a.chatId !== b.chatId || minutosEntre(a.fecha_hora, b.fecha_hora) >= MINUTOS_POSIBLE_DUPLICADA) continue;
+    const enComun = [...nombresDeAlimentos(a)].filter((nombre) => nombresDeAlimentos(b).has(nombre));
+    if (enComun.length > 0) {
+      posiblesDuplicadas.push(`#${a.id} y #${b.id} (${a.chatId}, ${a.fecha_hora} y ${b.fecha_hora}; en común: ${enComun.join(', ')})`);
+    }
   }
 }
 
 console.log('---------- Resumen ----------');
 console.log(`Revisadas: ${comidas.length - sinRevisar.length} de ${comidas.length}`);
-console.log(`Con más de ${CAMBIO_MINIMO * 100}% de diferencia: ${aCorregir.length}`);
+console.log(`Para corregir: ${aCorregir.length} (el total cambia más de un ${CAMBIO_MINIMO * 100}%, o algún alimento estaba mal calculado)`);
 if (sinRevisar.length > 0) console.log(`No se pudieron revisar: ${sinRevisar.join(' | ')}`);
 if (posiblesDuplicadas.length > 0) {
   console.log(`Posibles duplicadas (revisalas a mano; se borran con el botón 🗑️ o desde DBeaver): ${posiblesDuplicadas.join(' | ')}`);

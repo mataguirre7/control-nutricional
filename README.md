@@ -320,7 +320,8 @@ docker compose exec control-nutricional npm run revisar-comidas -- --aplicar   #
 
 - Mantiene los gramos guardados (pueden venir de una corrección con "Era más" o "Era menos") y recalcula solo los nutrientes.
 - Al corregir, recalcula también el progreso de grasa.
-- Avisa las **posibles duplicadas** (misma persona, menos de una hora de diferencia) sin borrarlas: se revisan a mano.
+- Corrige una comida si su total cambia más de un 20%, o si algún alimento estaba mal calculado (cambia más de la mitad y más de 50 kcal), aunque el total se mueva poco. Esos alimentos se marcan con "← mal calculado".
+- Avisa las **posibles duplicadas** (misma persona, menos de una hora de diferencia y algún alimento en común) sin borrarlas: se revisan a mano.
 - Cada comida es una llamada a Claude: unos centavos cada una.
 
 ---
