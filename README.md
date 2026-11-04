@@ -351,7 +351,7 @@ Así se procesa una foto de comida:
 1. [bot.js](src/bot.js) descarga la foto de Telegram y la guarda en `data/fotos/`.
 2. [vision.js](src/vision.js) se la manda a Claude, que completa todos los datos que encuentre en el mensaje: `kg`, `agua_ml`, `metas`, `items` y `respuesta`. Cada item trae nombre, término en inglés, gramos, confianza y nutrientes estimados.
 3. [nutrition.js](src/nutrition.js) busca cada item en USDA y escala los valores, que USDA da cada 100 g, a los gramos estimados. Para usar un resultado de USDA se tienen que cumplir dos cosas:
-   - Que sea el mismo alimento: la descripción de USDA tiene todas las palabras del término. Si no, el alimento no está en USDA.
+   - Que sea el mismo alimento: la descripción de USDA tiene todas las palabras del término y no es otra forma de él (en polvo, deshidratado, mezcla para preparar, sustituto, harina), salvo que el término la pida. Si no, el alimento no está en USDA.
    - Que sus calorías se parezcan a la estimación de Claude, sin ser más de 1,6 veces mayores ni menores. Si no, casi seguro es otra cosa (crudo en vez de cocido, o un ingrediente en vez del plato).
 
    Si no se cumplen, usa la estimación de Claude (`fuente: "estimado_ia"`). Antes se usaba el primer resultado aunque fuera otro alimento: por eso unos canelones de ricota y espinaca se calcularon con los valores de la espinaca cruda (23 kcal cada 100 g).

@@ -49,11 +49,21 @@ function palabras(texto) {
   return texto.toLowerCase().split(/[^a-z]+/).filter(Boolean);
 }
 
+// Palabras con las que USDA describe otra forma del alimento, con calorías muy distintas a las
+// de lo que se come: "Sauce, cheese sauce mix, dry" es el polvo para preparar la salsa,
+// "Milk, dry, whole" la leche en polvo y "sugar substitute" un edulcorante.
+const PALABRAS_DE_OTRA_FORMA = ['dry', 'dried', 'dehydrated', 'powder', 'powdered', 'mix', 'concentrate', 'concentrated', 'unprepared', 'substitute', 'imitation', 'flour', 'babyfood', 'infant'];
+
+// Es el mismo alimento si la descripción de USDA tiene todas las palabras del término y no
+// agrega ninguna de otra forma (salvo que el término la pida: "milk, dry" sí acepta leche en polvo).
 // La comparación es por palabra exacta a propósito: así "thigh" (muslo)
 // no coincide con "Chicken, skin (drumsticks and thighs)" (solo la piel).
-function contieneTodasLasPalabras(descripcion, termino) {
+function esElMismoAlimento(descripcion, termino) {
   const palabrasDescripcion = palabras(descripcion);
-  return palabras(termino).every((palabra) => palabrasDescripcion.includes(palabra));
+  const palabrasTermino = palabras(termino);
+  const tieneTodas = palabrasTermino.every((palabra) => palabrasDescripcion.includes(palabra));
+  const esOtraForma = PALABRAS_DE_OTRA_FORMA.some((palabra) => palabrasDescripcion.includes(palabra) && !palabrasTermino.includes(palabra));
+  return tieneTodas && !esOtraForma;
 }
 
 // Busca un término en USDA y devuelve el alimento que corresponde, o null si no está.
@@ -69,7 +79,7 @@ async function buscarEnUsda(termino) {
   // calculados con los valores de la espinaca cruda (23 kcal cada 100 g).
   for (const tiposDeDatos of intentos) {
     const alimentos = await pedirAUsda(termino, tiposDeDatos);
-    const coincidencia = alimentos.find((alimento) => contieneTodasLasPalabras(alimento.description, termino));
+    const coincidencia = alimentos.find((alimento) => esElMismoAlimento(alimento.description, termino));
     if (coincidencia) return coincidencia;
   }
   return null;
